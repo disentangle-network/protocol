@@ -10,7 +10,7 @@ use disentangle_identity::{
     CapabilitySubject, CoherenceProfile, Constraint, ConstraintContext, DIDDocument,
     DelegationRecord, GovernanceProposal, GovernanceVote, IdentityError, IdentityGraph,
     IntroductionContext, IntroductionTransaction, PetnameDB, ProposalResult, ProposalType,
-    RevocationScope, ServiceAgreement, VoteChoice, DID,
+    RevocationScope, SettlementAgreement, VoteChoice, DID,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ struct SerializableState {
     first_seen: HashMap<String, u64>,
     proposals: Vec<GovernanceProposal>,
     votes: Vec<GovernanceVote>,
-    agreements: Vec<ServiceAgreement>,
+    agreements: Vec<SettlementAgreement>,
 }
 
 pub struct IdentityStateManager {
@@ -43,7 +43,7 @@ pub struct IdentityStateManager {
     proposals: HashMap<Hash256, GovernanceProposal>,
     votes: Vec<GovernanceVote>,
     introduction_history: Vec<IntroductionTransaction>, // For persistence
-    agreements: HashMap<Hash256, ServiceAgreement>,
+    agreements: HashMap<Hash256, SettlementAgreement>,
 }
 
 impl Default for IdentityStateManager {
@@ -611,7 +611,7 @@ impl IdentityStateManager {
         );
         let signature = sign(provider_sk, message.as_bytes());
 
-        let agreement = ServiceAgreement::new(
+        let agreement = SettlementAgreement::new(
             provider_did.to_string(),
             consumer_did.to_string(),
             capability_id.copied(),
@@ -678,12 +678,12 @@ impl IdentityStateManager {
     }
 
     /// Get an agreement by ID
-    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&ServiceAgreement> {
+    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&SettlementAgreement> {
         self.agreements.get(agreement_id)
     }
 
     /// List all agreements involving a specific DID
-    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&ServiceAgreement> {
+    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&SettlementAgreement> {
         self.agreements
             .values()
             .filter(|agreement| agreement.involves_did(did))
@@ -716,7 +716,7 @@ impl IdentityStateManager {
         let introductions = self.introduction_history.clone();
 
         let proposals: Vec<GovernanceProposal> = self.proposals.values().cloned().collect();
-        let agreements: Vec<ServiceAgreement> = self.agreements.values().cloned().collect();
+        let agreements: Vec<SettlementAgreement> = self.agreements.values().cloned().collect();
 
         let state = SerializableState {
             did_registry_keys,

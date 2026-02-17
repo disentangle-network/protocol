@@ -24,7 +24,10 @@ pub mod petname;
 pub mod transactions;
 
 // Re-export main types
-pub use agreement::{AgreementStatus, AgreementTerms, ServiceAgreement};
+pub use agreement::{
+    AgreementStatus, AgreementTerms, CoherenceEffect, ResourceReceipt, ResourceType,
+    SettlementAgreement,
+};
 pub use capability::{
     AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, Constraint,
     ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
