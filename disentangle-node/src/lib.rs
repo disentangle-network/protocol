@@ -6,13 +6,14 @@
 //! - SHA2 → SHA3-256 for PoW
 //! - Added coherence validation using structural SimHash
 
+use sha3::{Sha3_256, Digest};
+use disentangle_dag::{Transaction, NodeId};
 use disentangle_crypto::hash::Hash256;
-use disentangle_dag::{NodeId, Transaction};
 use disentangle_simhash::SimHash;
-use sha3::{Digest, Sha3_256};
 
-pub mod identity_rpc;
 pub mod identity_state;
+pub mod identity_rpc;
+pub mod event_stream;
 
 pub struct HelloWorldPoW {
     pub target: [u8; 32],
@@ -85,18 +86,18 @@ impl Mempool {
         tx: Transaction,
         nonce: u64,
         now: u64,
-        _parent_simhashes: &[SimHash], // Reserved: for future SimHash chain validation
+        _parent_simhashes: &[SimHash],  // Reserved: for future SimHash chain validation
         expected_history_root: &Hash256,
     ) -> Result<(), MempoolError> {
         let tx_header = self.serialize_header(&tx);
         if !self.pow.validate(&tx_header, nonce) {
             return Err(MempoolError::InvalidPoW);
         }
-        let expected_simhash =
-            SimHash::from_structural(&tx.parents.to_vec(), expected_history_root);
-        let simhash_valid = tx
-            .simhash
-            .is_coherent(&expected_simhash, disentangle_simhash::COHERENCE_THRESHOLD);
+        let expected_simhash = SimHash::from_structural(
+            &tx.parents.to_vec(),
+            expected_history_root,
+        );
+        let simhash_valid = tx.simhash.is_coherent(&expected_simhash, disentangle_simhash::COHERENCE_THRESHOLD);
         let entry = MempoolEntry {
             tx: tx.clone(),
             received_at: now,
@@ -126,15 +127,15 @@ impl Mempool {
             .map(|e| &e.tx)
             .collect()
     }
-
+    
     pub fn remove(&mut self, id: &NodeId) -> Option<MempoolEntry> {
         self.entries.remove(id)
     }
-
+    
     pub fn len(&self) -> usize {
         self.entries.len()
     }
-
+    
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

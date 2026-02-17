@@ -14,35 +14,36 @@
 //! This is Phase 1 of the implementation, providing core types without ZK proofs
 //! or networking. ZK integration (Phase 2) and full DAG integration (Phase 3) will follow.
 
-pub mod capability;
-pub mod coherence;
 pub mod did;
-pub mod governance;
-pub mod graph;
+pub mod capability;
 pub mod petname;
 pub mod transactions;
+pub mod graph;
+pub mod coherence;
+pub mod governance;
+pub mod agreement;
 
 // Re-export main types
+pub use did::{DID, DIDDocument, AgentType, VerificationMethod, VerificationMethodType, RuntimeAttestation, ServiceEndpoint};
 pub use capability::{
-    AccessOp, Capability, CapabilityId, CapabilitySubject, Constraint, ConstraintContext,
-    DelegationRecord, GovernanceScope, NameOp, RevocationScope, TransactionScope,
+    Capability, CapabilityId, CapabilitySubject, Constraint, DelegationRecord,
+    TransactionScope, NameOp, AccessOp, GovernanceScope, RevocationScope, ConstraintContext,
+    CapabilityTemplate,
 };
-pub use coherence::{CoherenceProfile, COHERENCE_HALF_LIFE};
-pub use did::{
-    AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
-    VerificationMethodType, DID,
-};
-pub use governance::{
-    evaluate_proposal, GovernanceProposal, GovernanceQuorum, GovernanceVote, ProposalResult,
-    ProposalType, VoteChoice,
+pub use petname::{PetnameDB, PetnameEntry, IntroductionStep, ProposedName};
+pub use transactions::{
+    DisentangleTransaction, IdentityTransaction, CapabilityTransaction,
+    IntroductionTransaction, GovernanceTransaction, TransactionIdentity,
+    DIDRegistration, DIDUpdate, DIDUpdateOp, DIDDeactivation, KeyRotation,
+    IntroductionContext, CapabilityOperation,
 };
 pub use graph::IdentityGraph;
-pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
-pub use transactions::{
-    CapabilityOperation, CapabilityTransaction, DIDDeactivation, DIDRegistration, DIDUpdate,
-    DIDUpdateOp, DisentangleTransaction, GovernanceTransaction, IdentityTransaction,
-    IntroductionContext, IntroductionTransaction, KeyRotation, TransactionIdentity,
+pub use coherence::{CoherenceProfile, COHERENCE_HALF_LIFE};
+pub use governance::{
+    GovernanceProposal, GovernanceVote, VoteChoice, GovernanceQuorum,
+    ProposalType, ProposalResult, evaluate_proposal,
 };
+pub use agreement::{ServiceAgreement, AgreementTerms, AgreementStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
@@ -247,9 +248,7 @@ mod tests {
             [1u8; 32],
             1000,
             2000,
-            GovernanceQuorum::CoherenceWeighted {
-                threshold: SCALE / 2,
-            },
+            GovernanceQuorum::CoherenceWeighted { threshold: SCALE / 2 },
             &sk,
         );
 

@@ -3,17 +3,21 @@
 //! Manages DID lifecycle, capability operations, introductions, coherence tracking,
 //! and petnames for the Disentangle Protocol.
 
-use disentangle_crypto::hash::{sha3_256, Hash256};
-use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_identity::{
-    evaluate_proposal, AgentType, Capability, CapabilityId, CapabilitySubject, CoherenceProfile,
-    Constraint, ConstraintContext, DIDDocument, DelegationRecord, GovernanceProposal,
-    GovernanceVote, IdentityError, IdentityGraph, IntroductionContext, IntroductionTransaction,
-    PetnameDB, ProposalResult, ProposalType, RevocationScope, VoteChoice, DID,
+    DID, DIDDocument, AgentType, IdentityError,
+    Capability, CapabilityId, CapabilitySubject, Constraint, DelegationRecord, RevocationScope,
+    IntroductionTransaction, IntroductionContext,
+    IdentityGraph, CoherenceProfile, PetnameDB,
+    ConstraintContext,
+    GovernanceProposal, GovernanceVote, ProposalType, VoteChoice, ProposalResult,
+    evaluate_proposal,
+    ServiceAgreement, AgreementTerms, AgreementStatus,
 };
-use serde::{Deserialize, Serialize};
+use disentangle_crypto::signature::{SigningKey, VerifyingKey, generate_keypair};
+use disentangle_crypto::hash::{Hash256, sha3_256};
 use std::collections::HashMap;
 use std::path::Path;
+use serde::{Serialize, Deserialize};
 
 /// Serializable state for persistence
 #[derive(Serialize, Deserialize)]
@@ -28,6 +32,7 @@ struct SerializableState {
     first_seen: HashMap<String, u64>,
     proposals: Vec<GovernanceProposal>,
     votes: Vec<GovernanceVote>,
+    agreements: Vec<ServiceAgreement>,
 }
 
 pub struct IdentityStateManager {
@@ -41,6 +46,7 @@ pub struct IdentityStateManager {
     proposals: HashMap<Hash256, GovernanceProposal>,
     votes: Vec<GovernanceVote>,
     introduction_history: Vec<IntroductionTransaction>, // For persistence
+    agreements: HashMap<Hash256, ServiceAgreement>,
 }
 
 impl Default for IdentityStateManager {
@@ -62,16 +68,14 @@ impl IdentityStateManager {
             proposals: HashMap::new(),
             votes: Vec::new(),
             introduction_history: Vec::new(),
+            agreements: HashMap::new(),
         }
     }
 
     // DID Operations
 
     /// Register a new DID with the specified agent type
-    pub fn register_did(
-        &mut self,
-        agent_type: AgentType,
-    ) -> Result<(DID, DIDDocument, SigningKey), IdentityError> {
+    pub fn register_did(&mut self, agent_type: AgentType) -> Result<(DID, DIDDocument, SigningKey), IdentityError> {
         let (sk, pk) = generate_keypair();
 
         let is_agi = matches!(agent_type, AgentType::AGI { .. });
@@ -79,9 +83,7 @@ impl IdentityStateManager {
 
         // Prevent duplicate DIDs
         if self.did_registry.contains_key(&did.0) {
-            return Err(IdentityError::InvalidDID(
-                "DID already registered".to_string(),
-            ));
+            return Err(IdentityError::InvalidDID("DID already registered".to_string()));
         }
 
         let doc = DIDDocument::new(&sk, &pk, agent_type, self.current_depth);
@@ -90,8 +92,7 @@ impl IdentityStateManager {
         self.first_seen.insert(did.0.clone(), self.current_depth);
 
         // Store in registry
-        self.did_registry
-            .insert(did.0.clone(), (doc.clone(), pk.clone()));
+        self.did_registry.insert(did.0.clone(), (doc.clone(), pk.clone()));
 
         Ok((did, doc, sk))
     }
@@ -130,9 +131,7 @@ impl IdentityStateManager {
         constraints: Vec<Constraint>,
         delegatable: bool,
     ) -> Result<Capability, IdentityError> {
-        let (_, issuer_pk) = self
-            .did_registry
-            .get(issuer_did)
+        let (_, issuer_pk) = self.did_registry.get(issuer_did)
             .ok_or_else(|| IdentityError::DIDNotFound(issuer_did.to_string()))?;
 
         let did = DID(issuer_did.to_string());
@@ -158,9 +157,7 @@ impl IdentityStateManager {
         delegator_sk: &SigningKey,
         delegatee_did: &str,
     ) -> Result<DelegationRecord, IdentityError> {
-        let cap = self
-            .capability_store
-            .get(cap_id)
+        let cap = self.capability_store.get(cap_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(cap_id)))?;
 
         // Check if capability is revoked
@@ -171,20 +168,10 @@ impl IdentityStateManager {
         let delegator = DID(delegator_did.to_string());
         let delegatee = DID(delegatee_did.to_string());
 
-        let mut record = DelegationRecord::new(
-            cap,
-            &delegator,
-            &delegatee,
-            delegator_sk,
-            self.current_depth,
-        )?;
+        let mut record = DelegationRecord::new(cap, &delegator, &delegatee, delegator_sk, self.current_depth)?;
 
         // Calculate depth from existing chain
-        let existing_chain = self
-            .delegation_chains
-            .get(cap_id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let existing_chain = self.delegation_chains.get(cap_id).map(|v| v.as_slice()).unwrap_or(&[]);
         record.depth = (existing_chain.len() as u32 + 1) as u64;
 
         // Check depth limit
@@ -196,8 +183,7 @@ impl IdentityStateManager {
         }
 
         // Store delegation
-        self.delegation_chains
-            .entry(*cap_id)
+        self.delegation_chains.entry(*cap_id)
             .or_default()
             .push(record.clone());
 
@@ -208,14 +194,8 @@ impl IdentityStateManager {
     }
 
     /// Invoke a capability (check if invoker has permission)
-    pub fn invoke_capability(
-        &self,
-        cap_id: &CapabilityId,
-        invoker_did: &str,
-    ) -> Result<bool, IdentityError> {
-        let cap = self
-            .capability_store
-            .get(cap_id)
+    pub fn invoke_capability(&self, cap_id: &CapabilityId, invoker_did: &str) -> Result<bool, IdentityError> {
+        let cap = self.capability_store.get(cap_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(cap_id)))?;
 
         // Check if revoked
@@ -235,20 +215,13 @@ impl IdentityStateManager {
             .unwrap_or(false);
 
         if !is_delegatee {
-            return Err(IdentityError::ConstraintNotSatisfied(
-                "Not in delegation chain".to_string(),
-            ));
+            return Err(IdentityError::ConstraintNotSatisfied("Not in delegation chain".to_string()));
         }
 
         // Build constraint context
         let invoker = DID(invoker_did.to_string());
         let first_seen_depth = self.first_seen.get(invoker_did).copied().unwrap_or(0);
-        let coherence_profile = CoherenceProfile::compute(
-            &invoker,
-            &self.identity_graph,
-            first_seen_depth,
-            self.current_depth,
-        );
+        let coherence_profile = CoherenceProfile::compute(&invoker, &self.identity_graph, first_seen_depth, self.current_depth);
 
         let context = ConstraintContext {
             current_depth: self.current_depth,
@@ -260,9 +233,7 @@ impl IdentityStateManager {
 
         // Check all constraints
         if !cap.check_constraints(&context) {
-            return Err(IdentityError::ConstraintNotSatisfied(
-                "Capability constraints not met".to_string(),
-            ));
+            return Err(IdentityError::ConstraintNotSatisfied("Capability constraints not met".to_string()));
         }
 
         Ok(true)
@@ -275,16 +246,12 @@ impl IdentityStateManager {
         revoker_did: &str,
         scope: RevocationScope,
     ) -> Result<(), IdentityError> {
-        let cap = self
-            .capability_store
-            .get(cap_id)
+        let cap = self.capability_store.get(cap_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(cap_id)))?;
 
         // Only issuer can revoke
         if cap.issuer.0 != revoker_did {
-            return Err(IdentityError::ConstraintNotSatisfied(
-                "Only issuer can revoke".to_string(),
-            ));
+            return Err(IdentityError::ConstraintNotSatisfied("Only issuer can revoke".to_string()));
         }
 
         self.identity_graph.record_revocation(cap_id, scope);
@@ -362,12 +329,7 @@ impl IdentityStateManager {
         let did_obj = DID(did.to_string());
         let first_seen_depth = self.first_seen.get(did).copied().unwrap_or(0);
 
-        Some(CoherenceProfile::compute(
-            &did_obj,
-            &self.identity_graph,
-            first_seen_depth,
-            self.current_depth,
-        ))
+        Some(CoherenceProfile::compute(&did_obj, &self.identity_graph, first_seen_depth, self.current_depth))
     }
 
     /// Get identity curvature between two DIDs
@@ -375,9 +337,7 @@ impl IdentityStateManager {
         let did_a_obj = DID(did_a.to_string());
         let did_b_obj = DID(did_b.to_string());
 
-        let curvature_fp = self
-            .identity_graph
-            .identity_curvature(&did_a_obj, &did_b_obj);
+        let curvature_fp = self.identity_graph.identity_curvature(&did_a_obj, &did_b_obj);
 
         // Convert from fixed-point to f64
         use disentangle_dag::SCALE;
@@ -387,8 +347,7 @@ impl IdentityStateManager {
     /// Get neighbors of a DID
     pub fn get_neighbors(&self, did: &str) -> Vec<String> {
         let did_obj = DID(did.to_string());
-        self.identity_graph
-            .neighbors(&did_obj)
+        self.identity_graph.neighbors(&did_obj)
             .into_iter()
             .map(|d| d.0)
             .collect()
@@ -429,8 +388,7 @@ impl IdentityStateManager {
     /// Set a petname for a DID
     pub fn set_petname(&mut self, name: &str, did: &str) -> Result<(), IdentityError> {
         let did_obj = DID(did.to_string());
-        self.petnames
-            .bind(name, &did_obj, vec![], self.current_depth)
+        self.petnames.bind(name, &did_obj, vec![], self.current_depth)
     }
 
     /// Resolve a petname to a DID
@@ -450,9 +408,7 @@ impl IdentityStateManager {
         duration_blocks: u64,
     ) -> Result<GovernanceProposal, IdentityError> {
         // Verify proposer exists
-        let (_, proposer_pk) = self
-            .did_registry
-            .get(proposer_did)
+        let (_, proposer_pk) = self.did_registry.get(proposer_did)
             .ok_or_else(|| IdentityError::DIDNotFound(proposer_did.to_string()))?;
 
         let proposer = DID(proposer_did.to_string());
@@ -479,9 +435,7 @@ impl IdentityStateManager {
 
         // Verify the proposal signature
         if !proposal.verify(proposer_pk) {
-            return Err(IdentityError::InvalidDID(
-                "Invalid proposal signature".to_string(),
-            ));
+            return Err(IdentityError::InvalidDID("Invalid proposal signature".to_string()));
         }
 
         self.proposals.insert(proposal.id, proposal.clone());
@@ -498,29 +452,25 @@ impl IdentityStateManager {
         vote: VoteChoice,
     ) -> Result<GovernanceVote, IdentityError> {
         // Verify proposal exists
-        let proposal = self
-            .proposals
-            .get(proposal_id)
+        let proposal = self.proposals.get(proposal_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(proposal_id)))?;
 
         // Verify voter exists
-        let (_, voter_pk) = self
-            .did_registry
-            .get(voter_did)
+        let (_, voter_pk) = self.did_registry.get(voter_did)
             .ok_or_else(|| IdentityError::DIDNotFound(voter_did.to_string()))?;
 
         // Check voting window
         if self.current_depth < proposal.voting_start || self.current_depth > proposal.voting_end {
             return Err(IdentityError::ConstraintNotSatisfied(
-                "Voting period not active".to_string(),
+                "Voting period not active".to_string()
             ));
         }
 
         // Create vote transaction identity
         // For Phase 1, we use the voter's public key as ephemeral_pk (placeholder)
         // In Phase 2, this would use ZK proofs
-        use disentangle_crypto::types::Nullifier;
         use disentangle_identity::TransactionIdentity;
+        use disentangle_crypto::types::Nullifier;
 
         let voter_identity = TransactionIdentity {
             ephemeral_pk: voter_pk.clone(),
@@ -561,21 +511,112 @@ impl IdentityStateManager {
         for did_str in self.did_registry.keys() {
             let did = DID(did_str.clone());
             let first_seen_depth = self.first_seen.get(did_str).copied().unwrap_or(0);
-            let profile = CoherenceProfile::compute(
-                &did,
-                &self.identity_graph,
-                first_seen_depth,
-                self.current_depth,
-            );
+            let profile = CoherenceProfile::compute(&did, &self.identity_graph, first_seen_depth, self.current_depth);
             profiles.insert(did, profile);
         }
 
-        Some(evaluate_proposal(
-            proposal,
-            &self.votes,
-            &profiles,
+        Some(evaluate_proposal(proposal, &self.votes, &profiles, self.current_depth))
+    }
+
+    // Agreement Operations
+
+    /// Propose a new service agreement
+    pub fn propose_agreement(
+        &mut self,
+        provider_did: &str,
+        provider_sk: &SigningKey,
+        consumer_did: &str,
+        capability_id: Option<&Hash256>,
+        terms: AgreementTerms,
+    ) -> Result<Hash256, IdentityError> {
+        // Verify provider exists
+        if !self.did_registry.contains_key(provider_did) {
+            return Err(IdentityError::DIDNotFound(provider_did.to_string()));
+        }
+
+        // Verify consumer exists
+        if !self.did_registry.contains_key(consumer_did) {
+            return Err(IdentityError::DIDNotFound(consumer_did.to_string()));
+        }
+
+        // Sign the agreement proposal
+        use disentangle_crypto::sign;
+        let message = format!("AGREEMENT:{}:{}:{}", provider_did, consumer_did, terms.description);
+        let signature = sign(provider_sk, message.as_bytes());
+
+        let agreement = ServiceAgreement::new(
+            provider_did.to_string(),
+            consumer_did.to_string(),
+            capability_id.copied(),
+            terms,
             self.current_depth,
-        ))
+            signature.to_bytes().to_vec(),
+        );
+
+        let agreement_id = agreement.id;
+        self.agreements.insert(agreement_id, agreement);
+
+        Ok(agreement_id)
+    }
+
+    /// Accept a proposed agreement (consumer signature)
+    pub fn accept_agreement(
+        &mut self,
+        agreement_id: &Hash256,
+        consumer_sk: &SigningKey,
+    ) -> Result<(), IdentityError> {
+        let agreement = self.agreements.get_mut(agreement_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(agreement_id)))?;
+
+        if agreement.status != AgreementStatus::Proposed {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Agreement is not in Proposed state".to_string()
+            ));
+        }
+
+        // Sign the acceptance
+        use disentangle_crypto::sign;
+        let message = format!("ACCEPT:{}", hex::encode(agreement_id));
+        let signature = sign(consumer_sk, message.as_bytes());
+
+        agreement.accept(signature.to_bytes().to_vec());
+
+        Ok(())
+    }
+
+    /// Complete an agreement with success status
+    pub fn complete_agreement(
+        &mut self,
+        agreement_id: &Hash256,
+        success: bool,
+        outcome_hash: Hash256,
+        _signer_sk: &SigningKey,
+    ) -> Result<(), IdentityError> {
+        let agreement = self.agreements.get_mut(agreement_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(agreement_id)))?;
+
+        if agreement.status != AgreementStatus::Active {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Agreement is not in Active state".to_string()
+            ));
+        }
+
+        agreement.complete(success, outcome_hash, self.current_depth);
+
+        Ok(())
+    }
+
+    /// Get an agreement by ID
+    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&ServiceAgreement> {
+        self.agreements.get(agreement_id)
+    }
+
+    /// List all agreements involving a specific DID
+    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&ServiceAgreement> {
+        self.agreements
+            .values()
+            .filter(|agreement| agreement.involves_did(did))
+            .collect()
     }
 
     // Persistence Operations
@@ -595,8 +636,7 @@ impl IdentityStateManager {
 
         let capabilities: Vec<Capability> = self.capability_store.values().cloned().collect();
 
-        let delegations: Vec<(String, Vec<DelegationRecord>)> = self
-            .delegation_chains
+        let delegations: Vec<(String, Vec<DelegationRecord>)> = self.delegation_chains
             .iter()
             .map(|(cap_id, chain)| (hex::encode(cap_id), chain.clone()))
             .collect();
@@ -604,6 +644,7 @@ impl IdentityStateManager {
         let introductions = self.introduction_history.clone();
 
         let proposals: Vec<GovernanceProposal> = self.proposals.values().cloned().collect();
+        let agreements: Vec<ServiceAgreement> = self.agreements.values().cloned().collect();
 
         let state = SerializableState {
             did_registry_keys,
@@ -616,6 +657,7 @@ impl IdentityStateManager {
             first_seen: self.first_seen.clone(),
             proposals,
             votes: self.votes.clone(),
+            agreements,
         };
 
         let json = serde_json::to_string_pretty(&state)
@@ -642,9 +684,8 @@ impl IdentityStateManager {
             let doc = &state.did_documents[i];
             let vk_bytes = hex::decode(&state.verifying_keys_hex[i])
                 .map_err(|_| IdentityError::InvalidDID("Invalid verifying key hex".to_string()))?;
-            let vk = VerifyingKey::from_bytes(&vk_bytes).map_err(|_| {
-                IdentityError::InvalidDID("Invalid verifying key bytes".to_string())
-            })?;
+            let vk = VerifyingKey::from_bytes(&vk_bytes)
+                .map_err(|_| IdentityError::InvalidDID("Invalid verifying key bytes".to_string()))?;
             did_registry.insert(key.clone(), (doc.clone(), vk));
         }
 
@@ -660,9 +701,7 @@ impl IdentityStateManager {
             let cap_id_bytes = hex::decode(&cap_id_hex)
                 .map_err(|_| IdentityError::InvalidDID("Invalid capability ID".to_string()))?;
             if cap_id_bytes.len() != 32 {
-                return Err(IdentityError::InvalidDID(
-                    "Capability ID must be 32 bytes".to_string(),
-                ));
+                return Err(IdentityError::InvalidDID("Capability ID must be 32 bytes".to_string()));
             }
             let mut cap_id = [0u8; 32];
             cap_id.copy_from_slice(&cap_id_bytes);
@@ -688,6 +727,12 @@ impl IdentityStateManager {
             proposals.insert(proposal.id, proposal);
         }
 
+        // Reconstruct agreements
+        let mut agreements = HashMap::new();
+        for agreement in state.agreements {
+            agreements.insert(agreement.id, agreement);
+        }
+
         Ok(Self {
             did_registry,
             capability_store,
@@ -699,6 +744,7 @@ impl IdentityStateManager {
             proposals,
             votes: state.votes,
             introduction_history: state.introductions,
+            agreements,
         })
     }
 
@@ -736,9 +782,7 @@ mod tests {
     #[test]
     fn test_register_agi_did() {
         let mut manager = IdentityStateManager::new();
-        let result = manager.register_did(AgentType::AGI {
-            runtime_attestation: None,
-        });
+        let result = manager.register_did(AgentType::AGI { runtime_attestation: None });
 
         assert!(result.is_ok());
         let (did, doc, _sk) = result.unwrap();
@@ -780,7 +824,13 @@ mod tests {
             scope: TransactionScope::All,
         };
 
-        let result = manager.create_capability(&did.0, &sk, subject, vec![], true);
+        let result = manager.create_capability(
+            &did.0,
+            &sk,
+            subject,
+            vec![],
+            true,
+        );
 
         assert!(result.is_ok());
         let cap = result.unwrap();
@@ -797,21 +847,21 @@ mod tests {
         let (delegatee_did, _doc2, _sk2) = manager.register_did(AgentType::Human).unwrap();
 
         // Create capability
-        let cap = manager
-            .create_capability(
-                &issuer_did.0,
-                &issuer_sk,
-                CapabilitySubject::Transact {
-                    scope: TransactionScope::All,
-                },
-                vec![],
-                true,
-            )
-            .unwrap();
+        let cap = manager.create_capability(
+            &issuer_did.0,
+            &issuer_sk,
+            CapabilitySubject::Transact { scope: TransactionScope::All },
+            vec![],
+            true,
+        ).unwrap();
 
         // Delegate
-        let result =
-            manager.delegate_capability(&cap.id, &issuer_did.0, &issuer_sk, &delegatee_did.0);
+        let result = manager.delegate_capability(
+            &cap.id,
+            &issuer_did.0,
+            &issuer_sk,
+            &delegatee_did.0,
+        );
 
         assert!(result.is_ok());
         let delegation = result.unwrap();
@@ -830,17 +880,13 @@ mod tests {
         let (did_c, _, _sk_c) = manager.register_did(AgentType::Human).unwrap();
 
         // Create capability with max depth 2
-        let mut cap = manager
-            .create_capability(
-                &did_a.0,
-                &sk_a,
-                CapabilitySubject::Transact {
-                    scope: TransactionScope::All,
-                },
-                vec![],
-                true,
-            )
-            .unwrap();
+        let mut cap = manager.create_capability(
+            &did_a.0,
+            &sk_a,
+            CapabilitySubject::Transact { scope: TransactionScope::All },
+            vec![],
+            true,
+        ).unwrap();
         cap.max_delegation_depth = 2;
         manager.capability_store.insert(cap.id, cap.clone());
 
@@ -866,17 +912,13 @@ mod tests {
 
         let (issuer_did, _, issuer_sk) = manager.register_did(AgentType::Human).unwrap();
 
-        let cap = manager
-            .create_capability(
-                &issuer_did.0,
-                &issuer_sk,
-                CapabilitySubject::Transact {
-                    scope: TransactionScope::All,
-                },
-                vec![],
-                true,
-            )
-            .unwrap();
+        let cap = manager.create_capability(
+            &issuer_did.0,
+            &issuer_sk,
+            CapabilitySubject::Transact { scope: TransactionScope::All },
+            vec![],
+            true,
+        ).unwrap();
 
         // Revoke
         let result = manager.revoke_capability(&cap.id, &issuer_did.0, RevocationScope::Single);
@@ -924,10 +966,7 @@ mod tests {
         // A and B share C and D as neighbors
         let curvature = manager.get_identity_curvature(&did_a.0, &did_b.0);
         assert!(curvature.is_some());
-        assert!(
-            curvature.unwrap() > 0.0,
-            "Expected positive curvature with shared neighbors"
-        );
+        assert!(curvature.unwrap() > 0.0, "Expected positive curvature with shared neighbors");
     }
 
     #[test]
@@ -943,10 +982,7 @@ mod tests {
         // No shared neighbors beyond each other -> negative curvature
         let curvature = manager.get_identity_curvature(&did_a.0, &did_b.0);
         assert!(curvature.is_some());
-        assert!(
-            curvature.unwrap() < 0.0,
-            "Expected negative curvature with no shared neighbors"
-        );
+        assert!(curvature.unwrap() < 0.0, "Expected negative curvature with no shared neighbors");
     }
 
     #[test]
@@ -978,10 +1014,7 @@ mod tests {
         assert!(profile2.is_some());
         let mass2 = profile2.unwrap().topological_mass;
 
-        assert!(
-            mass2 > mass1,
-            "Topological mass should increase with more introductions"
-        );
+        assert!(mass2 > mass1, "Topological mass should increase with more introductions");
     }
 
     #[test]
@@ -1004,22 +1037,15 @@ mod tests {
 
         // Mass should decay over time (20,000 depths = 2 half-lives)
         // Expected decay: initial_mass >> 2 = initial_mass / 4
-        assert!(
-            decayed_mass < initial_mass,
+        assert!(decayed_mass < initial_mass,
             "Coherence should decay over time: initial={}, decayed={}",
-            initial_mass,
-            decayed_mass
-        );
+            initial_mass, decayed_mass);
 
         // Should be roughly 1/4 of initial (2 half-lives)
         let expected_approx = initial_mass / 4;
         let tolerance = initial_mass / 10; // 10% tolerance
-        assert!(
-            (decayed_mass as i64 - expected_approx as i64).abs() < tolerance as i64,
-            "Decayed mass {} should be close to expected {}",
-            decayed_mass,
-            expected_approx
-        );
+        assert!((decayed_mass as i64 - expected_approx as i64).abs() < tolerance as i64,
+            "Decayed mass {} should be close to expected {}", decayed_mass, expected_approx);
     }
 
     #[test]
@@ -1051,7 +1077,7 @@ mod tests {
 
         // Connect honest agents in a mesh (each knows multiple others)
         for i in 0..honest_agents.len() {
-            for j in (i + 1)..honest_agents.len() {
+            for j in (i+1)..honest_agents.len() {
                 if i != j {
                     let (ref did_i, ref sk_i) = honest_agents[i];
                     let (ref did_j, _) = honest_agents[j];
@@ -1074,21 +1100,17 @@ mod tests {
         }
 
         // Compute average coherence for honest vs Sybil
-        let honest_coherence: Vec<i32> = honest_agents
-            .iter()
+        let honest_coherence: Vec<i32> = honest_agents.iter()
             .map(|(did, _)| {
-                manager
-                    .get_coherence_profile(&did.0)
+                manager.get_coherence_profile(&did.0)
                     .map(|p| p.topological_mass)
                     .unwrap_or(0)
             })
             .collect();
 
-        let sybil_coherence: Vec<i32> = sybil_agents
-            .iter()
+        let sybil_coherence: Vec<i32> = sybil_agents.iter()
             .map(|did| {
-                manager
-                    .get_coherence_profile(&did.0)
+                manager.get_coherence_profile(&did.0)
                     .map(|p| p.topological_mass)
                     .unwrap_or(0)
             })
@@ -1098,11 +1120,134 @@ mod tests {
         let avg_sybil = sybil_coherence.iter().sum::<i32>() / sybil_coherence.len() as i32;
 
         // Honest agents should have significantly higher coherence
-        assert!(
-            avg_honest > avg_sybil,
+        assert!(avg_honest > avg_sybil,
             "Honest agents (avg={}) should have higher coherence than Sybil agents (avg={})",
-            avg_honest,
-            avg_sybil
-        );
+            avg_honest, avg_sybil);
+    }
+
+    #[test]
+    fn test_propose_and_accept_agreement() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Compute 100 embeddings".to_string(),
+            deadline_depth: Some(1000),
+            success_criteria: vec!["All embeddings returned".to_string()],
+            max_invocations: Some(100),
+        };
+
+        // Propose agreement
+        let agreement_id = manager.propose_agreement(
+            &did_provider.0,
+            &sk_provider,
+            &did_consumer.0,
+            None,
+            terms,
+        ).unwrap();
+
+        // Check it exists and is in Proposed state
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        assert_eq!(agreement.status, disentangle_identity::AgreementStatus::Proposed);
+        assert!(agreement.consumer_signature.is_none());
+
+        // Accept agreement
+        manager.accept_agreement(&agreement_id, &sk_consumer).unwrap();
+
+        // Check it's now Active
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        assert_eq!(agreement.status, disentangle_identity::AgreementStatus::Active);
+        assert!(agreement.consumer_signature.is_some());
+    }
+
+    #[test]
+    fn test_complete_agreement_success() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Test service".to_string(),
+            deadline_depth: None,
+            success_criteria: vec![],
+            max_invocations: None,
+        };
+
+        let agreement_id = manager.propose_agreement(
+            &did_provider.0,
+            &sk_provider,
+            &did_consumer.0,
+            None,
+            terms,
+        ).unwrap();
+
+        manager.accept_agreement(&agreement_id, &sk_consumer).unwrap();
+
+        // Complete agreement successfully
+        let outcome_hash = [42u8; 32];
+        manager.complete_agreement(&agreement_id, true, outcome_hash, &sk_provider).unwrap();
+
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        match agreement.status {
+            disentangle_identity::AgreementStatus::Completed { success, outcome_hash: hash } => {
+                assert!(success);
+                assert_eq!(hash, outcome_hash);
+            }
+            _ => panic!("Expected Completed status"),
+        }
+        assert!(agreement.completed_depth.is_some());
+    }
+
+    #[test]
+    fn test_list_agreements_by_did() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, _sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+        let (did_other, _, _sk_other) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Test".to_string(),
+            deadline_depth: None,
+            success_criteria: vec![],
+            max_invocations: None,
+        };
+
+        // Create two agreements involving provider
+        let agreement_id1 = manager.propose_agreement(
+            &did_provider.0,
+            &sk_provider,
+            &did_consumer.0,
+            None,
+            terms.clone(),
+        ).unwrap();
+
+        let agreement_id2 = manager.propose_agreement(
+            &did_provider.0,
+            &sk_provider,
+            &did_other.0,
+            None,
+            terms,
+        ).unwrap();
+
+        // Provider should see both agreements
+        let provider_agreements = manager.list_agreements_for_did(&did_provider.0);
+        assert_eq!(provider_agreements.len(), 2);
+        let ids: Vec<_> = provider_agreements.iter().map(|a| a.id).collect();
+        assert!(ids.contains(&agreement_id1));
+        assert!(ids.contains(&agreement_id2));
+
+        // Consumer should see only one
+        let consumer_agreements = manager.list_agreements_for_did(&did_consumer.0);
+        assert_eq!(consumer_agreements.len(), 1);
+        assert_eq!(consumer_agreements[0].id, agreement_id1);
+
+        // Other should see only one
+        let other_agreements = manager.list_agreements_for_did(&did_other.0);
+        assert_eq!(other_agreements.len(), 1);
+        assert_eq!(other_agreements[0].id, agreement_id2);
     }
 }
