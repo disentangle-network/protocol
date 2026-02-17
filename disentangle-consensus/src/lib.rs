@@ -24,13 +24,15 @@
 //! compute_topological_mass_verified() --> MassResult with verified_claims
 //! ```
 
-use std::collections::HashMap;
-use disentangle_dag::{TransactionDAG, FixedPoint, SCALE, fp_mul, fp_from_ratio};
 use disentangle_crypto::hash::Hash256;
-use disentangle_zkp::{ReputationClaim, ReputationVerifier, bucket_weight};
+use disentangle_dag::{fp_from_ratio, fp_mul, FixedPoint, TransactionDAG, SCALE};
+use disentangle_zkp::{bucket_weight, ReputationClaim, ReputationVerifier};
+use std::collections::HashMap;
 
 // Re-export ZKP types for convenience
-pub use disentangle_zkp::{AccountStateLeaf, AccountMerkleTree, ReputationProver, ReputationBucket};
+pub use disentangle_zkp::{
+    AccountMerkleTree, AccountStateLeaf, ReputationBucket, ReputationProver,
+};
 
 pub type NodeId = Hash256;
 
@@ -228,12 +230,11 @@ pub fn compute_topological_mass_verified(
 
 /// Verify a single reputation claim against a verification context.
 /// Useful for pre-validation before adding transactions to the DAG.
-pub fn verify_reputation_claim(
-    claim: &ReputationClaim,
-    ctx: &VerificationContext,
-) -> bool {
+pub fn verify_reputation_claim(claim: &ReputationClaim, ctx: &VerificationContext) -> bool {
     let verifier = ReputationVerifier::new();
-    verifier.verify(claim, &ctx.expected_root, ctx.current_epoch).is_ok()
+    verifier
+        .verify(claim, &ctx.expected_root, ctx.current_epoch)
+        .is_ok()
 }
 
 fn integer_log1p(x: i32) -> FixedPoint {
@@ -346,9 +347,9 @@ pub fn verify_confidential_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use disentangle_dag::Transaction;
     use disentangle_crypto::signature::generate_keypair;
-    use disentangle_crypto::types::{Nullifier, Epoch};
+    use disentangle_crypto::types::{Epoch, Nullifier};
+    use disentangle_dag::Transaction;
     use disentangle_simhash::SimHash;
     use disentangle_zkp::{AccountStateLeaf, ReputationProver};
 
@@ -362,9 +363,10 @@ mod tests {
     fn make_test_tx(depth_seed: u64, parents: Vec<NodeId>, reputation: u64) -> Transaction {
         let (sk, pk) = generate_keypair();
         let history_root = [depth_seed as u8; 32];
-        let parent_hashes: Vec<Hash256> = parents.iter().copied().collect();
+        let parent_hashes: Vec<Hash256> = parents.to_vec();
         let simhash = SimHash::from_structural(&parent_hashes, &history_root);
-        let nullifier = Nullifier::compute(&[depth_seed as u8; 32], Epoch(0), &depth_seed.to_le_bytes());
+        let nullifier =
+            Nullifier::compute(&[depth_seed as u8; 32], Epoch(0), &depth_seed.to_le_bytes());
         let mut tx = Transaction {
             id: [0u8; 32],
             ephemeral_pk: pk,
@@ -462,9 +464,7 @@ mod tests {
     fn test_verified_mass_wrong_epoch() {
         let mut dag = TransactionDAG::new();
 
-        let accounts = vec![
-            AccountStateLeaf::new([1u8; 32], 100, 10, 0),
-        ];
+        let accounts = vec![AccountStateLeaf::new([1u8; 32], 100, 10, 0)];
         let prover = ReputationProver::new(&accounts);
         let merkle_root = prover.merkle_root();
 
@@ -490,9 +490,7 @@ mod tests {
     fn test_verified_mass_wrong_root() {
         let mut dag = TransactionDAG::new();
 
-        let accounts = vec![
-            AccountStateLeaf::new([1u8; 32], 100, 10, 0),
-        ];
+        let accounts = vec![AccountStateLeaf::new([1u8; 32], 100, 10, 0)];
         let prover = ReputationProver::new(&accounts);
 
         let genesis = make_test_tx(0, vec![], 100);
@@ -529,9 +527,7 @@ mod tests {
     fn test_strict_mode_invalid_proof() {
         let mut dag = TransactionDAG::new();
 
-        let accounts = vec![
-            AccountStateLeaf::new([1u8; 32], 100, 10, 0),
-        ];
+        let accounts = vec![AccountStateLeaf::new([1u8; 32], 100, 10, 0)];
         let prover = ReputationProver::new(&accounts);
 
         let genesis = make_test_tx(0, vec![], 100);
@@ -546,14 +542,15 @@ mod tests {
         proofs.insert(gid, claim);
 
         let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs);
-        assert!(matches!(result, Err(ConsensusError::VerificationFailed { .. })));
+        assert!(matches!(
+            result,
+            Err(ConsensusError::VerificationFailed { .. })
+        ));
     }
 
     #[test]
     fn test_verify_reputation_claim_helper() {
-        let accounts = vec![
-            AccountStateLeaf::new([1u8; 32], 100, 10, 0),
-        ];
+        let accounts = vec![AccountStateLeaf::new([1u8; 32], 100, 10, 0)];
         let prover = ReputationProver::new(&accounts);
         let merkle_root = prover.merkle_root();
 
@@ -639,8 +636,10 @@ mod tests {
         let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, 1);
 
         // Verify masses are equal (or very close due to fixed-point rounding)
-        assert_eq!(mass_a.total_mass, mass_b.total_mass,
-            "Masses should be equal for identical transactions");
+        assert_eq!(
+            mass_a.total_mass, mass_b.total_mass,
+            "Masses should be equal for identical transactions"
+        );
 
         // Tiebreaker should use lexicographic comparison of node IDs
         let expected_winner = if branch_a_id < branch_b_id {
@@ -649,8 +648,10 @@ mod tests {
             ConflictWinner::BranchB
         };
 
-        assert_eq!(winner, expected_winner,
-            "Winner should be determined by lexicographic NodeId comparison when masses are equal");
+        assert_eq!(
+            winner, expected_winner,
+            "Winner should be determined by lexicographic NodeId comparison when masses are equal"
+        );
 
         // Verify determinism: calling again should produce same result
         let (winner2, _, _) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, 1);
@@ -677,8 +678,10 @@ mod tests {
         dag.insert_genesis(branch_b);
 
         // Initially, neither branch should be finalized (equal mass)
-        assert!(!is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
-            "Branch A should not be finalized with equal mass");
+        assert!(
+            !is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
+            "Branch A should not be finalized with equal mass"
+        );
 
         // Build descendants on branch A to increase its mass
         let mut current_parent = branch_a_id;
@@ -689,12 +692,16 @@ mod tests {
         }
 
         // Now branch A should have much more mass and be finalized
-        assert!(is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
-            "Branch A should be finalized with 10+ descendants vs 1 competitor");
+        assert!(
+            is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
+            "Branch A should be finalized with 10+ descendants vs 1 competitor"
+        );
 
         // Branch B should NOT be finalized
-        assert!(!is_finalized(&mut dag, &branch_b_id, &[branch_a_id], 1),
-            "Branch B should not be finalized when competitor has much more mass");
+        assert!(
+            !is_finalized(&mut dag, &branch_b_id, &[branch_a_id], 1),
+            "Branch B should not be finalized when competitor has much more mass"
+        );
     }
 
     #[test]
@@ -767,7 +774,10 @@ mod tests {
 
         // Test that it's deterministic
         let curv_c_a_2 = compute_curvature(&dag, &cid, &aid);
-        assert_eq!(curv_c_a, curv_c_a_2, "Curvature computation must be deterministic");
+        assert_eq!(
+            curv_c_a, curv_c_a_2,
+            "Curvature computation must be deterministic"
+        );
     }
 
     #[test]
@@ -780,7 +790,11 @@ mod tests {
         assert_eq!(integer_log1p(-100), 0, "log1p(negative) should be 0");
 
         // Test small positive values
-        assert_eq!(integer_log1p(1), SCALE / 4, "log1p(1) should return SCALE/4");
+        assert_eq!(
+            integer_log1p(1),
+            SCALE / 4,
+            "log1p(1) should return SCALE/4"
+        );
 
         // Test that function is monotonically increasing for positive inputs
         let log_10 = integer_log1p(10);
@@ -863,9 +877,18 @@ mod tests {
         let mass_post = compute_topological_mass(&mut dag, &post_id, 7000);
 
         // All should produce valid mass values
-        assert!(mass_early.total_mass > 0, "Early bootstrap should produce valid mass");
-        assert!(mass_mid.total_mass > 0, "Mid bootstrap should produce valid mass");
-        assert!(mass_post.total_mass > 0, "Post bootstrap should produce valid mass");
+        assert!(
+            mass_early.total_mass > 0,
+            "Early bootstrap should produce valid mass"
+        );
+        assert!(
+            mass_mid.total_mass > 0,
+            "Mid bootstrap should produce valid mass"
+        );
+        assert!(
+            mass_post.total_mass > 0,
+            "Post bootstrap should produce valid mass"
+        );
 
         // The actual ramping effect is tested indirectly through the integration test
         // This test just verifies that the fork_block parameter is accepted and doesn't break anything
@@ -900,10 +923,15 @@ mod tests {
         let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &aid, &bid, 1);
 
         // Branch B should have more mass due to descendants
-        assert!(mass_b.total_mass > mass_a.total_mass,
-            "Branch with more descendants should have higher mass");
-        assert_eq!(winner, ConflictWinner::BranchB,
-            "Branch with higher mass should win");
+        assert!(
+            mass_b.total_mass > mass_a.total_mass,
+            "Branch with more descendants should have higher mass"
+        );
+        assert_eq!(
+            winner,
+            ConflictWinner::BranchB,
+            "Branch with higher mass should win"
+        );
     }
 
     #[test]
@@ -936,7 +964,9 @@ mod tests {
 
         // The actual value depends on implementation, but it should be
         // less than a highly connected triangle
-        assert!(curv < SCALE,
-            "Bridge between disjoint clusters should have lower curvature than fully connected");
+        assert!(
+            curv < SCALE,
+            "Bridge between disjoint clusters should have lower curvature than fully connected"
+        );
     }
 }

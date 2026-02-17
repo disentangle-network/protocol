@@ -11,8 +11,8 @@
 //! - SimHash seed derivation
 //! - Nullifier computation
 
-use sha3::{Sha3_256, Digest};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 
 pub const HASH_BYTES: usize = 32;
 

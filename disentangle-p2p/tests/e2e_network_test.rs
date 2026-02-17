@@ -8,40 +8,27 @@
 //!
 //! Uses in-process nodes with virtual networking for deterministic testing.
 
-use disentangle_p2p::{
-    build_swarm, generate_keypair,
-    WireMessage, WireTransaction, SyncState, SyncResult,
-    DisentangleBehaviourEvent, DisentangleRequest, DisentangleResponse,
-    GOSSIP_TOPIC,
-};
-use disentangle_dag::{Transaction, NodeId};
 use disentangle_consensus::resolve_conflict;
-use disentangle_simhash::SimHash;
 use disentangle_crypto::{
-    generate_keypair as generate_dilithium_keypair,
-    sign as dilithium_sign,
-    sha3_256,
-    types::{Nullifier, Epoch},
+    generate_keypair as generate_dilithium_keypair, sha3_256, sign as dilithium_sign,
+    types::{Epoch, Nullifier},
 };
+use disentangle_dag::{NodeId, Transaction};
+use disentangle_p2p::{
+    build_swarm, generate_keypair, DisentangleBehaviourEvent, DisentangleRequest,
+    DisentangleResponse, SyncResult, SyncState, WireMessage, WireTransaction, GOSSIP_TOPIC,
+};
+use disentangle_simhash::SimHash;
 
-use libp2p::{
-    gossipsub::IdentTopic,
-    swarm::SwarmEvent,
-    futures::StreamExt,
-    Multiaddr, PeerId,
-};
+use libp2p::{futures::StreamExt, gossipsub::IdentTopic, swarm::SwarmEvent, Multiaddr, PeerId};
 use std::collections::HashSet;
 use std::time::Duration;
-use tokio::time::{timeout, sleep};
+use tokio::time::{sleep, timeout};
 
 const POW_DIFFICULTY: u8 = 8; // Lower difficulty for faster tests
 
 /// Create a test transaction with v0.3 structure
-fn create_test_transaction(
-    name: &str,
-    parents: Vec<NodeId>,
-    epoch_num: u64,
-) -> (Transaction, u64) {
+fn create_test_transaction(name: &str, parents: Vec<NodeId>, epoch_num: u64) -> (Transaction, u64) {
     let (signing_key, ephemeral_pk) = generate_dilithium_keypair();
 
     // History root derived from name for determinism
@@ -128,10 +115,16 @@ async fn test_sync_state_basic() {
     let genesis_wire = create_genesis();
     let genesis_id = genesis_wire.tx.id;
     let result = sync.receive_transaction(genesis_wire.clone());
-    assert!(matches!(result, SyncResult::Inserted), "Genesis should be inserted");
+    assert!(
+        matches!(result, SyncResult::Inserted),
+        "Genesis should be inserted"
+    );
 
     // Verify genesis is in DAG
-    assert!(sync.dag().get(&genesis_id).is_some(), "Genesis should be in DAG");
+    assert!(
+        sync.dag().get(&genesis_id).is_some(),
+        "Genesis should be in DAG"
+    );
 
     // Verify tips
     let tips = sync.tips();
@@ -140,7 +133,10 @@ async fn test_sync_state_basic() {
 
     // Try inserting again (should be AlreadyHave)
     let result = sync.receive_transaction(genesis_wire);
-    assert!(matches!(result, SyncResult::AlreadyHave), "Duplicate should return AlreadyHave");
+    assert!(
+        matches!(result, SyncResult::AlreadyHave),
+        "Duplicate should return AlreadyHave"
+    );
 
     println!("TEST PASSED: SyncState basic operations work correctly\n");
 }
@@ -167,8 +163,14 @@ async fn test_sync_state_chain() {
         let message = sha3_256(b"disentangle-test-genesis-b");
         let signature = dilithium_sign(&signing_key, &message);
         let mut genesis = Transaction {
-            id: [0u8; 32], ephemeral_pk, signature, parents: vec![],
-            simhash, nullifier, reputation_claim: 0, confidential_outputs: vec![],
+            id: [0u8; 32],
+            ephemeral_pk,
+            signature,
+            parents: vec![],
+            simhash,
+            nullifier,
+            reputation_claim: 0,
+            confidential_outputs: vec![],
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)
@@ -179,20 +181,25 @@ async fn test_sync_state_chain() {
     // Build a chain of 5 transactions, each referencing genesis_a + previous tx
     let mut prev_id = genesis_b_id;
     for i in 1..=5 {
-        let (tx, nonce) = create_test_transaction(
-            &format!("tx_{}", i),
-            vec![genesis_a_id, prev_id],
-            i as u64,
-        );
+        let (tx, nonce) =
+            create_test_transaction(&format!("tx_{}", i), vec![genesis_a_id, prev_id], i as u64);
         let wire_tx = WireTransaction::new(tx.clone(), nonce);
         prev_id = tx.id;
 
         let result = sync.receive_transaction(wire_tx);
-        assert!(matches!(result, SyncResult::Inserted), "Transaction {} should be inserted", i);
+        assert!(
+            matches!(result, SyncResult::Inserted),
+            "Transaction {} should be inserted",
+            i
+        );
     }
 
     // Verify DAG size: 2 genesis + 5 chain = 7
-    assert_eq!(sync.transaction_count(), 7, "Should have 7 transactions (2 genesis + 5)");
+    assert_eq!(
+        sync.transaction_count(),
+        7,
+        "Should have 7 transactions (2 genesis + 5)"
+    );
 
     // Verify tip is the last transaction
     let tips = sync.tips();
@@ -224,8 +231,14 @@ async fn test_sync_state_missing_parents() {
         let message = sha3_256(b"disentangle-missing-parents-genesis-b");
         let signature = dilithium_sign(&signing_key, &message);
         let mut genesis = Transaction {
-            id: [0u8; 32], ephemeral_pk, signature, parents: vec![],
-            simhash, nullifier, reputation_claim: 0, confidential_outputs: vec![],
+            id: [0u8; 32],
+            ephemeral_pk,
+            signature,
+            parents: vec![],
+            simhash,
+            nullifier,
+            reputation_claim: 0,
+            confidential_outputs: vec![],
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)
@@ -256,11 +269,18 @@ async fn test_sync_state_missing_parents() {
     // Now insert tx_1 - should trigger propagation of tx_2
     let wire_tx_1 = WireTransaction::new(tx_1, nonce_1);
     let result = sync.receive_transaction(wire_tx_1);
-    assert!(matches!(result, SyncResult::Inserted), "tx_1 should be inserted");
+    assert!(
+        matches!(result, SyncResult::Inserted),
+        "tx_1 should be inserted"
+    );
 
     // tx_2 should now be inserted automatically: 2 genesis + tx_1 + tx_2 = 4
     assert_eq!(sync.transaction_count(), 4, "Should have 4 transactions");
-    assert_eq!(sync.pending_count(), 0, "Should have 0 pending transactions");
+    assert_eq!(
+        sync.pending_count(),
+        0,
+        "Should have 0 pending transactions"
+    );
 
     println!("TEST PASSED: SyncState missing parent handling works correctly\n");
 }
@@ -287,8 +307,14 @@ async fn test_sync_state_fork_and_conflict() {
         let message = sha3_256(b"disentangle-fork-genesis-b");
         let signature = dilithium_sign(&signing_key, &message);
         let mut genesis = Transaction {
-            id: [0u8; 32], ephemeral_pk, signature, parents: vec![],
-            simhash, nullifier, reputation_claim: 0, confidential_outputs: vec![],
+            id: [0u8; 32],
+            ephemeral_pk,
+            signature,
+            parents: vec![],
+            simhash,
+            nullifier,
+            reputation_claim: 0,
+            confidential_outputs: vec![],
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)
@@ -409,7 +435,8 @@ async fn test_swarm_creation() {
                 _ => continue,
             }
         }
-    }).await;
+    })
+    .await;
 
     assert!(result.is_ok(), "Should receive NewListenAddr event");
 
@@ -449,7 +476,9 @@ async fn test_two_node_connection() {
                 _ => continue,
             }
         }
-    }).await.expect("Node 1 should start listening");
+    })
+    .await
+    .expect("Node 1 should start listening");
 
     println!("Node 1 listening on: {}", node1_addr);
 
@@ -481,7 +510,8 @@ async fn test_two_node_connection() {
                 return true;
             }
         }
-    }).await;
+    })
+    .await;
 
     assert!(connected.is_ok(), "Nodes should connect");
     assert!(connected.unwrap(), "Both nodes should report connection");
@@ -523,7 +553,9 @@ async fn test_gossip_propagation() {
                 _ => continue,
             }
         }
-    }).await.expect("Node 1 should start listening");
+    })
+    .await
+    .expect("Node 1 should start listening");
 
     // Node 2 listens too (needed for gossipsub)
     let listen_addr2: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
@@ -537,7 +569,9 @@ async fn test_gossip_propagation() {
                 _ => continue,
             }
         }
-    }).await.expect("Node 2 should start listening");
+    })
+    .await
+    .expect("Node 2 should start listening");
 
     // Node 2 connects to node 1
     swarm2.dial(node1_addr).expect("Should dial");
@@ -559,7 +593,9 @@ async fn test_gossip_propagation() {
                 }
             }
         }
-    }).await.expect("Nodes should connect");
+    })
+    .await
+    .expect("Nodes should connect");
 
     println!("Nodes connected. Waiting for gossipsub mesh to form...");
 
@@ -584,7 +620,10 @@ async fn test_gossip_propagation() {
     let msg = WireMessage::NewTransaction(genesis_wire);
     let encoded = msg.encode().expect("Should encode");
 
-    let publish_result = swarm1.behaviour_mut().gossipsub.publish(topic.clone(), encoded.clone());
+    let publish_result = swarm1
+        .behaviour_mut()
+        .gossipsub
+        .publish(topic.clone(), encoded.clone());
     println!("Publish result: {:?}", publish_result);
 
     // Try to receive the message on node 2
@@ -606,17 +645,23 @@ async fn test_gossip_propagation() {
                 }
             }
         }
-    }).await;
+    })
+    .await;
 
     match received {
         Ok(received_id) => {
-            assert_eq!(received_id, genesis_id, "Received transaction ID should match");
+            assert_eq!(
+                received_id, genesis_id,
+                "Received transaction ID should match"
+            );
             println!("\nTEST PASSED: Gossip transaction propagation works correctly\n");
         }
         Err(_) => {
             // Gossipsub requires mesh formation which may not complete in test timing
             // This is expected behavior - mark as skipped rather than failed
-            println!("\nTEST SKIPPED: Gossipsub mesh did not form in time (expected in unit tests)\n");
+            println!(
+                "\nTEST SKIPPED: Gossipsub mesh did not form in time (expected in unit tests)\n"
+            );
             println!("NOTE: Full gossip testing requires integration test with longer timeouts\n");
         }
     }
@@ -651,7 +696,9 @@ async fn test_request_response_protocol() {
                 _ => continue,
             }
         }
-    }).await.expect("Node 1 should start listening");
+    })
+    .await
+    .expect("Node 1 should start listening");
 
     // Node 2 connects to node 1
     swarm2.dial(node1_addr).expect("Should dial");
@@ -668,12 +715,17 @@ async fn test_request_response_protocol() {
                 _event = swarm2.select_next_some() => {}
             }
         }
-    }).await.expect("Nodes should connect");
+    })
+    .await
+    .expect("Nodes should connect");
 
     println!("Nodes connected. Sending request...");
 
     // Node 2 sends GetTips request to node 1
-    swarm2.behaviour_mut().request_response.send_request(&peer_id1, DisentangleRequest::GetTips);
+    swarm2
+        .behaviour_mut()
+        .request_response
+        .send_request(&peer_id1, DisentangleRequest::GetTips);
 
     // Handle the request/response exchange
     let result = timeout(Duration::from_secs(10), async {
@@ -681,28 +733,24 @@ async fn test_request_response_protocol() {
             tokio::select! {
                 event = swarm1.select_next_some() => {
                     if let SwarmEvent::Behaviour(DisentangleBehaviourEvent::RequestResponse(
-                        libp2p::request_response::Event::Message { peer, message }
+                        libp2p::request_response::Event::Message { peer, message: libp2p::request_response::Message::Request { request, channel, .. } }
                     )) = event {
-                        if let libp2p::request_response::Message::Request { request, channel, .. } = message {
-                            println!("Node 1 received request from {}: {:?}", peer, request);
+                        println!("Node 1 received request from {}: {:?}", peer, request);
 
-                            // Send response
-                            let tips = vec![[0u8; 32], [1u8; 32]];
-                            let _ = swarm1.behaviour_mut().request_response.send_response(
-                                channel,
-                                DisentangleResponse::Tips(tips)
-                            );
-                        }
+                        // Send response
+                        let tips = vec![[0u8; 32], [1u8; 32]];
+                        let _ = swarm1.behaviour_mut().request_response.send_response(
+                            channel,
+                            DisentangleResponse::Tips(tips)
+                        );
                     }
                 }
                 event = swarm2.select_next_some() => {
                     if let SwarmEvent::Behaviour(DisentangleBehaviourEvent::RequestResponse(
-                        libp2p::request_response::Event::Message { message, .. }
+                        libp2p::request_response::Event::Message { message: libp2p::request_response::Message::Response { response, .. }, .. }
                     )) = event {
-                        if let libp2p::request_response::Message::Response { response, .. } = message {
-                            println!("Node 2 received response: {:?}", response);
-                            return response;
-                        }
+                        println!("Node 2 received response: {:?}", response);
+                        return response;
                     }
                 }
             }

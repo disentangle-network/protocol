@@ -4,8 +4,8 @@
 //! Uses bit decomposition approach.
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, AbstractField};
 use p3_baby_bear::BabyBear;
+use p3_field::{AbstractField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -68,7 +68,11 @@ impl RangeWitness {
 
         for (i, trace_bit) in trace.iter_mut().enumerate().take(RANGE_BITS) {
             let bit = (self.value >> i) & 1;
-            *trace_bit = if bit == 1 { BabyBear::one() } else { BabyBear::zero() };
+            *trace_bit = if bit == 1 {
+                BabyBear::one()
+            } else {
+                BabyBear::zero()
+            };
             if bit == 1 {
                 reconstructed += power_of_two;
             }
@@ -98,9 +102,9 @@ mod tests {
 
         // Check bit decomposition of 42 = 0b101010
         let row: Vec<_> = trace.row(0).collect();
-        assert_eq!(row[1], BabyBear::one());  // bit 1
-        assert_eq!(row[3], BabyBear::one());  // bit 3
-        assert_eq!(row[5], BabyBear::one());  // bit 5
+        assert_eq!(row[1], BabyBear::one()); // bit 1
+        assert_eq!(row[3], BabyBear::one()); // bit 3
+        assert_eq!(row[5], BabyBear::one()); // bit 5
         assert_eq!(row[0], BabyBear::zero()); // bit 0
         assert_eq!(row[2], BabyBear::zero()); // bit 2
     }
@@ -112,8 +116,8 @@ mod tests {
 
         // All bits should be 1
         let row: Vec<_> = trace.row(0).collect();
-        for i in 0..RANGE_BITS {
-            assert_eq!(row[i], BabyBear::one());
+        for bit in row.iter().take(RANGE_BITS) {
+            assert_eq!(*bit, BabyBear::one());
         }
     }
 
@@ -124,8 +128,8 @@ mod tests {
 
         // All bits should be 0
         let row: Vec<_> = trace.row(0).collect();
-        for i in 0..RANGE_BITS {
-            assert_eq!(row[i], BabyBear::zero());
+        for bit in row.iter().take(RANGE_BITS) {
+            assert_eq!(*bit, BabyBear::zero());
         }
 
         // Original and reconstructed should both be 0
@@ -141,11 +145,11 @@ mod tests {
 
         let row: Vec<_> = trace.row(0).collect();
         // Only bit 8 should be set
-        for i in 0..RANGE_BITS {
+        for (i, bit) in row.iter().enumerate().take(RANGE_BITS) {
             if i == 8 {
-                assert_eq!(row[i], BabyBear::one());
+                assert_eq!(*bit, BabyBear::one());
             } else {
-                assert_eq!(row[i], BabyBear::zero());
+                assert_eq!(*bit, BabyBear::zero());
             }
         }
     }

@@ -2,28 +2,27 @@
 //!
 //! Full node with P2P networking and HTTP RPC interface.
 
-use disentangle_p2p::{
-    build_swarm, generate_keypair, parse_peer_addr,
-    WireMessage, WireTransaction, SyncState, SyncResult,
-    behaviour::{DisentangleRequest, DisentangleResponse},
-    GOSSIP_TOPIC,
-};
-use disentangle_dag::{Transaction, NodeId, SCALE};
-use disentangle_consensus::{resolve_conflict, ConflictWinner, compute_curvature};
-use disentangle_simhash::SimHash;
-use disentangle_node::{HelloWorldPoW, identity_state::IdentityStateManager, identity_rpc};
+use disentangle_consensus::{compute_curvature, resolve_conflict, ConflictWinner};
 use disentangle_crypto::{
-    signature::{generate_keypair as generate_dilithium_keypair, sign as dilithium_sign},
     hash::{sha3_256, Hash256},
-    types::{Nullifier, Epoch},
+    signature::{generate_keypair as generate_dilithium_keypair, sign as dilithium_sign},
+    types::{Epoch, Nullifier},
 };
+use disentangle_dag::{NodeId, Transaction, SCALE};
+use disentangle_node::{identity_rpc, identity_state::IdentityStateManager, HelloWorldPoW};
+use disentangle_p2p::{
+    behaviour::{DisentangleRequest, DisentangleResponse},
+    build_swarm, generate_keypair, parse_peer_addr, SyncResult, SyncState, WireMessage,
+    WireTransaction, GOSSIP_TOPIC,
+};
+use disentangle_simhash::SimHash;
 
 use libp2p::{
+    futures::StreamExt,
     gossipsub::{self, IdentTopic},
     identify,
     request_response::{self, OutboundRequestId},
     swarm::SwarmEvent,
-    futures::StreamExt,
     Multiaddr, PeerId, Swarm,
 };
 use std::collections::HashSet;
@@ -32,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{interval, Interval};
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use axum::{
@@ -40,12 +39,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use tower_http::cors::{CorsLayer, Any};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 
 const POW_DIFFICULTY: u8 = 16;
 const MINE_INTERVAL_SECS: u64 = 10;
-
 
 #[derive(Clone)]
 struct SharedState {
@@ -70,7 +68,10 @@ struct ConflictRecord {
 
 enum NodeCommand {
     BroadcastTx(WireTransaction),
-    TargetedBroadcast { tx: WireTransaction, target_peer: Option<usize> },
+    TargetedBroadcast {
+        tx: WireTransaction,
+        target_peer: Option<usize>,
+    },
 }
 
 #[derive(Serialize)]
@@ -131,7 +132,6 @@ struct GraphEdge {
     curvature: f64,
 }
 
-
 async fn status_handler(State(state): State<SharedState>) -> Json<StatusResponse> {
     let sync = state.sync.lock().await;
     let tips: Vec<String> = sync.tips().iter().map(|t| hex::encode(&t[..8])).collect();
@@ -154,7 +154,8 @@ async fn graph_handler(State(state): State<SharedState>) -> Json<GraphResponse> 
     let dag = sync.dag();
     let tips_set: HashSet<NodeId> = sync.tips().into_iter().collect();
     let conflicts = state.conflicts_resolved.lock().await;
-    let conflict_ids: HashSet<String> = conflicts.iter()
+    let conflict_ids: HashSet<String> = conflicts
+        .iter()
         .flat_map(|c| vec![c.tx_a.clone(), c.tx_b.clone()])
         .collect();
     drop(conflicts);
@@ -212,11 +213,13 @@ async fn submit_tx_handler(
                 arr.copy_from_slice(&b);
                 parents.push(arr);
             }
-            _ => return Json(TxResponse {
-                success: false,
-                tx_id: None,
-                error: Some(format!("Invalid parent hex: {}", p)),
-            }),
+            _ => {
+                return Json(TxResponse {
+                    success: false,
+                    tx_id: None,
+                    error: Some(format!("Invalid parent hex: {}", p)),
+                })
+            }
         }
     }
 
@@ -263,7 +266,12 @@ async fn submit_tx_handler(
     let nonce = pow.mine(&tx_header);
     let wire_tx = WireTransaction::new(tx, nonce);
     let tx_id_hex = hex::encode(&tx_id[..8]);
-    if state.cmd_tx.send(NodeCommand::BroadcastTx(wire_tx)).await.is_err() {
+    if state
+        .cmd_tx
+        .send(NodeCommand::BroadcastTx(wire_tx))
+        .await
+        .is_err()
+    {
         return Json(TxResponse {
             success: false,
             tx_id: None,
@@ -276,7 +284,6 @@ async fn submit_tx_handler(
         error: None,
     })
 }
-
 
 async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<ConflictResponse> {
     let sync = state.sync.lock().await;
@@ -347,15 +354,24 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
     let wire_blue = WireTransaction::new(tx_blue, nonce_blue);
     let tx_red_hex = hex::encode(&tx_red_id[..8]);
     let tx_blue_hex = hex::encode(&tx_blue_id[..8]);
-    info!("TRIGGERING CONFLICT: RED={} BLUE={}", tx_red_hex, tx_blue_hex);
-    let _ = state.cmd_tx.send(NodeCommand::TargetedBroadcast {
-        tx: wire_red.clone(),
-        target_peer: Some(0)
-    }).await;
-    let _ = state.cmd_tx.send(NodeCommand::TargetedBroadcast {
-        tx: wire_blue.clone(),
-        target_peer: Some(1)
-    }).await;
+    info!(
+        "TRIGGERING CONFLICT: RED={} BLUE={}",
+        tx_red_hex, tx_blue_hex
+    );
+    let _ = state
+        .cmd_tx
+        .send(NodeCommand::TargetedBroadcast {
+            tx: wire_red.clone(),
+            target_peer: Some(0),
+        })
+        .await;
+    let _ = state
+        .cmd_tx
+        .send(NodeCommand::TargetedBroadcast {
+            tx: wire_blue.clone(),
+            target_peer: Some(1),
+        })
+        .await;
     let mut sync = state.sync.lock().await;
     let _ = sync.receive_transaction(wire_red);
     let _ = sync.receive_transaction(wire_blue);
@@ -367,7 +383,6 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
         message: "Conflict injected. RED sent to peer 0, BLUE sent to peer 1.".into(),
     })
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -443,32 +458,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let identity_state = shared_state.identity.clone();
     let identity_router = Router::new()
         // Identity endpoints
-        .route("/identity/register", post(identity_rpc::identity_register_handler))
+        .route(
+            "/identity/register",
+            post(identity_rpc::identity_register_handler),
+        )
         .route("/identity/:did", get(identity_rpc::identity_get_handler))
-        .route("/identity/:did", axum::routing::delete(identity_rpc::identity_deactivate_handler))
+        .route(
+            "/identity/:did",
+            axum::routing::delete(identity_rpc::identity_deactivate_handler),
+        )
         .route("/identity", get(identity_rpc::identity_list_handler))
         // Capability endpoints
-        .route("/capability/create", post(identity_rpc::capability_create_handler))
-        .route("/capability/delegate", post(identity_rpc::capability_delegate_handler))
-        .route("/capability/invoke", post(identity_rpc::capability_invoke_handler))
-        .route("/capability/revoke", post(identity_rpc::capability_revoke_handler))
-        .route("/capability/:cap_id_hex", get(identity_rpc::capability_get_handler))
-        .route("/capability/by-did/:did", get(identity_rpc::capability_list_by_did_handler))
+        .route(
+            "/capability/create",
+            post(identity_rpc::capability_create_handler),
+        )
+        .route(
+            "/capability/delegate",
+            post(identity_rpc::capability_delegate_handler),
+        )
+        .route(
+            "/capability/invoke",
+            post(identity_rpc::capability_invoke_handler),
+        )
+        .route(
+            "/capability/revoke",
+            post(identity_rpc::capability_revoke_handler),
+        )
+        .route(
+            "/capability/:cap_id_hex",
+            get(identity_rpc::capability_get_handler),
+        )
+        .route(
+            "/capability/by-did/:did",
+            get(identity_rpc::capability_list_by_did_handler),
+        )
         // Introduction endpoints
-        .route("/introduction", post(identity_rpc::introduction_create_handler))
-        .route("/introduction/chain/:from_did/:to_did", get(identity_rpc::introduction_chain_handler))
+        .route(
+            "/introduction",
+            post(identity_rpc::introduction_create_handler),
+        )
+        .route(
+            "/introduction/chain/:from_did/:to_did",
+            get(identity_rpc::introduction_chain_handler),
+        )
         // Coherence endpoints
-        .route("/coherence/:did", get(identity_rpc::coherence_profile_handler))
-        .route("/coherence/curvature/:did_a/:did_b", get(identity_rpc::coherence_curvature_handler))
-        .route("/coherence/neighbors/:did", get(identity_rpc::coherence_neighbors_handler))
+        .route(
+            "/coherence/:did",
+            get(identity_rpc::coherence_profile_handler),
+        )
+        .route(
+            "/coherence/curvature/:did_a/:did_b",
+            get(identity_rpc::coherence_curvature_handler),
+        )
+        .route(
+            "/coherence/neighbors/:did",
+            get(identity_rpc::coherence_neighbors_handler),
+        )
         // Petname endpoints
         .route("/petname", post(identity_rpc::petname_set_handler))
         .route("/petname/:name", get(identity_rpc::petname_resolve_handler))
         // Governance endpoints
-        .route("/governance/propose", post(identity_rpc::governance_propose_handler))
-        .route("/governance/vote", post(identity_rpc::governance_vote_handler))
-        .route("/governance/proposals", get(identity_rpc::governance_list_proposals_handler))
-        .route("/governance/:proposal_id_hex", get(identity_rpc::governance_get_proposal_handler))
+        .route(
+            "/governance/propose",
+            post(identity_rpc::governance_propose_handler),
+        )
+        .route(
+            "/governance/vote",
+            post(identity_rpc::governance_vote_handler),
+        )
+        .route(
+            "/governance/proposals",
+            get(identity_rpc::governance_list_proposals_handler),
+        )
+        .route(
+            "/governance/:proposal_id_hex",
+            get(identity_rpc::governance_get_proposal_handler),
+        )
         .with_state(identity_state);
 
     let app = Router::new()
@@ -533,9 +599,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             event = swarm.select_next_some() => {
                 handle_swarm_event(
-                    &mut swarm, 
-                    &shared_state, 
-                    &topic, 
+                    &mut swarm,
+                    &shared_state,
+                    &topic,
                     &mut connected_peers,
                     event
                 ).await;
@@ -543,7 +609,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 }
-
 
 fn create_genesis(sync: &mut SyncState) {
     // Generate a deterministic genesis keypair (for reproducibility)
@@ -579,7 +644,11 @@ fn create_genesis(sync: &mut SyncState) {
     info!("Genesis created: {}", hex::encode(&genesis_id[..8]));
 }
 
-fn mine_transaction(sync: &mut SyncState, height: &mut u64, peer_id: PeerId) -> Option<WireTransaction> {
+fn mine_transaction(
+    sync: &mut SyncState,
+    height: &mut u64,
+    peer_id: PeerId,
+) -> Option<WireTransaction> {
     let tips = sync.tips();
     // Need at least MIN_PARENTS=2 tips to mine a valid transaction
     if tips.len() < 2 {
@@ -630,10 +699,17 @@ fn mine_transaction(sync: &mut SyncState, height: &mut u64, peer_id: PeerId) -> 
     }
 }
 
-fn broadcast_tx(swarm: &mut Swarm<disentangle_p2p::DisentangleBehaviour>, topic: &IdentTopic, wire_tx: &WireTransaction) {
+fn broadcast_tx(
+    swarm: &mut Swarm<disentangle_p2p::DisentangleBehaviour>,
+    topic: &IdentTopic,
+    wire_tx: &WireTransaction,
+) {
     let msg = WireMessage::NewTransaction(wire_tx.clone());
     if let Ok(bytes) = msg.encode() {
-        let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bytes);
+        let _ = swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), bytes);
     }
 }
 
@@ -650,14 +726,17 @@ fn handle_command(
         NodeCommand::TargetedBroadcast { tx, target_peer } => {
             if let Some(idx) = target_peer {
                 if let Some(peer) = peers.get(idx) {
-                    info!("Sending targeted tx {} to peer {}", hex::encode(&tx.tx.id[..8]), peer);
+                    info!(
+                        "Sending targeted tx {} to peer {}",
+                        hex::encode(&tx.tx.id[..8]),
+                        peer
+                    );
                 }
             }
             broadcast_tx(swarm, topic, &tx);
         }
     }
 }
-
 
 async fn handle_swarm_event(
     swarm: &mut Swarm<disentangle_p2p::DisentangleBehaviour>,
@@ -679,8 +758,14 @@ async fn handle_swarm_event(
             // If our DAG is empty, request tips from the new peer to sync genesis
             let dag_empty = state.sync.lock().await.transaction_count() == 0;
             if dag_empty {
-                info!("DAG empty, requesting tips from {} for genesis sync", peer_id);
-                swarm.behaviour_mut().request_response.send_request(&peer_id, DisentangleRequest::GetTips);
+                info!(
+                    "DAG empty, requesting tips from {} for genesis sync",
+                    peer_id
+                );
+                swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_request(&peer_id, DisentangleRequest::GetTips);
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -690,24 +775,52 @@ async fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(behaviour_event) => {
             match behaviour_event {
-                DisentangleBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, propagation_source, .. }) => {
-                    handle_gossip_message(swarm, state, &message.data, propagation_source, topic, connected_peers).await;
+                DisentangleBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                    message,
+                    propagation_source,
+                    ..
+                }) => {
+                    handle_gossip_message(
+                        swarm,
+                        state,
+                        &message.data,
+                        propagation_source,
+                        topic,
+                        connected_peers,
+                    )
+                    .await;
                 }
-                DisentangleBehaviourEvent::RequestResponse(request_response::Event::Message { peer, message }) => {
-                    match message {
-                        request_response::Message::Request { request, channel, .. } => {
-                            handle_request(swarm, state, peer, request, channel).await;
-                        }
-                        request_response::Message::Response { request_id, response } => {
-                            handle_response(swarm, state, request_id, response, connected_peers).await;
-                        }
+                DisentangleBehaviourEvent::RequestResponse(request_response::Event::Message {
+                    peer,
+                    message,
+                }) => match message {
+                    request_response::Message::Request {
+                        request, channel, ..
+                    } => {
+                        handle_request(swarm, state, peer, request, channel).await;
                     }
-                }
-                DisentangleBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                    debug!("Identify received from {}: {:?}", peer_id, info.listen_addrs);
+                    request_response::Message::Response {
+                        request_id,
+                        response,
+                    } => {
+                        handle_response(swarm, state, request_id, response, connected_peers).await;
+                    }
+                },
+                DisentangleBehaviourEvent::Identify(identify::Event::Received {
+                    peer_id,
+                    info,
+                    ..
+                }) => {
+                    debug!(
+                        "Identify received from {}: {:?}",
+                        peer_id, info.listen_addrs
+                    );
                     // Feed discovered addresses into Kademlia for DHT routing
                     for addr in &info.listen_addrs {
-                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr.clone());
                     }
                     // Trigger Kademlia bootstrap now that we know a peer
                     if let Err(e) = swarm.behaviour_mut().kademlia.bootstrap() {
@@ -724,7 +837,6 @@ async fn handle_swarm_event(
     }
 }
 
-
 async fn handle_gossip_message(
     swarm: &mut Swarm<disentangle_p2p::DisentangleBehaviour>,
     state: &SharedState,
@@ -735,7 +847,10 @@ async fn handle_gossip_message(
 ) {
     let msg = match WireMessage::decode(data) {
         Ok(m) => m,
-        Err(e) => { warn!("Decode error: {}", e); return; }
+        Err(e) => {
+            warn!("Decode error: {}", e);
+            return;
+        }
     };
     if let WireMessage::NewTransaction(wire_tx) = msg {
         let tx_id = wire_tx.tx.id;
@@ -745,7 +860,11 @@ async fn handle_gossip_message(
         let conflict = detect_conflict(&sync, &wire_tx.tx);
         match sync.receive_transaction(wire_tx.clone()) {
             SyncResult::Inserted => {
-                info!("📥 Inserted tx {} from gossip. DAG: {}", tx_id_hex, sync.transaction_count());
+                info!(
+                    "📥 Inserted tx {} from gossip. DAG: {}",
+                    tx_id_hex,
+                    sync.transaction_count()
+                );
                 if let Some(conflicting_id) = conflict {
                     drop(sync);
                     resolve_and_record_conflict(state, tx_id, conflicting_id).await;
@@ -755,13 +874,20 @@ async fn handle_gossip_message(
                 for parent_id in parents {
                     if let Some(peer) = peers.first() {
                         let request = DisentangleRequest::GetTransaction(parent_id);
-                        swarm.behaviour_mut().request_response.send_request(peer, request);
+                        swarm
+                            .behaviour_mut()
+                            .request_response
+                            .send_request(peer, request);
                     }
                 }
             }
             SyncResult::AlreadyHave | SyncResult::AlreadyPending => {}
-            SyncResult::InvalidPoW => { warn!("Invalid PoW from {}", source); }
-            SyncResult::BufferFull => { warn!("Buffer full"); }
+            SyncResult::InvalidPoW => {
+                warn!("Invalid PoW from {}", source);
+            }
+            SyncResult::BufferFull => {
+                warn!("Buffer full");
+            }
         }
     }
 }
@@ -769,17 +895,21 @@ async fn handle_gossip_message(
 fn detect_conflict(sync: &SyncState, new_tx: &Transaction) -> Option<NodeId> {
     let dag = sync.dag();
     for existing_id in dag.transaction_ids() {
-        if *existing_id == new_tx.id { continue; }
+        if *existing_id == new_tx.id {
+            continue;
+        }
         if let Some(existing) = dag.get(existing_id) {
             // v0.2: Compare ephemeral public keys to detect same-identity conflicts
             if existing.ephemeral_pk == new_tx.ephemeral_pk {
                 let shared_parents: HashSet<_> = existing.parents.iter().collect();
                 for p in &new_tx.parents {
                     if shared_parents.contains(p) {
-                        info!("CONFLICT DETECTED: {} vs {} (shared parent {})",
-                              hex::encode(&new_tx.id[..8]),
-                              hex::encode(&existing_id[..8]),
-                              hex::encode(&p[..8]));
+                        info!(
+                            "CONFLICT DETECTED: {} vs {} (shared parent {})",
+                            hex::encode(&new_tx.id[..8]),
+                            hex::encode(&existing_id[..8]),
+                            hex::encode(&p[..8])
+                        );
                         return Some(*existing_id);
                     }
                 }
@@ -789,7 +919,6 @@ fn detect_conflict(sync: &SyncState, new_tx: &Transaction) -> Option<NodeId> {
     None
 }
 
-
 async fn resolve_and_record_conflict(state: &SharedState, tx_a: NodeId, tx_b: NodeId) {
     let mut sync = state.sync.lock().await;
     let dag = sync.dag_mut();
@@ -798,10 +927,15 @@ async fn resolve_and_record_conflict(state: &SharedState, tx_a: NodeId, tx_b: No
         let tx_b_data = dag.get(&tx_b);
         match (tx_a_data, tx_b_data) {
             (Some(a), Some(b)) => {
-                let common: Vec<_> = a.parents.iter().filter(|p| b.parents.contains(p)).cloned().collect();
+                let common: Vec<_> = a
+                    .parents
+                    .iter()
+                    .filter(|p| b.parents.contains(p))
+                    .cloned()
+                    .collect();
                 common.first().cloned()
             }
-            _ => None
+            _ => None,
         }
     };
     let fork = match fork_point {
@@ -813,7 +947,10 @@ async fn resolve_and_record_conflict(state: &SharedState, tx_a: NodeId, tx_b: No
     };
     // v0.3: Use fork depth instead of fork block
     let fork_depth = dag.depth(&fork);
-    info!("⚖️  RESOLVING CONFLICT at fork point {}", hex::encode(&fork[..8]));
+    info!(
+        "⚖️  RESOLVING CONFLICT at fork point {}",
+        hex::encode(&fork[..8])
+    );
     let (winner, mass_a, mass_b) = resolve_conflict(dag, &tx_a, &tx_b, fork_depth);
     let winner_id = match winner {
         ConflictWinner::BranchA => tx_a,
@@ -821,8 +958,16 @@ async fn resolve_and_record_conflict(state: &SharedState, tx_a: NodeId, tx_b: No
     };
     info!("======================================");
     info!("🏆 CONFLICT RESOLVED!");
-    info!("   Branch A ({}): Mass {}", hex::encode(&tx_a[..8]), mass_a.total_mass as f64 / 65536.0);
-    info!("   Branch B ({}): Mass {}", hex::encode(&tx_b[..8]), mass_b.total_mass as f64 / 65536.0);
+    info!(
+        "   Branch A ({}): Mass {}",
+        hex::encode(&tx_a[..8]),
+        mass_a.total_mass as f64 / 65536.0
+    );
+    info!(
+        "   Branch B ({}): Mass {}",
+        hex::encode(&tx_b[..8]),
+        mass_b.total_mass as f64 / 65536.0
+    );
     info!("   WINNER: {}", hex::encode(&winner_id[..8]));
     info!("======================================");
     let timestamp = std::time::SystemTime::now()
@@ -856,18 +1001,20 @@ async fn handle_request(
                 Some(wire_tx) => DisentangleResponse::Transaction(wire_tx.encode().ok()),
                 None => DisentangleResponse::Transaction(None),
             };
-            let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+            let _ = swarm
+                .behaviour_mut()
+                .request_response
+                .send_response(channel, response);
         }
         DisentangleRequest::GetTips => {
             let sync = state.sync.lock().await;
-            let _ = swarm.behaviour_mut().request_response.send_response(
-                channel,
-                DisentangleResponse::Tips(sync.tips()),
-            );
+            let _ = swarm
+                .behaviour_mut()
+                .request_response
+                .send_response(channel, DisentangleResponse::Tips(sync.tips()));
         }
     }
 }
-
 
 async fn handle_response(
     swarm: &mut Swarm<disentangle_p2p::DisentangleBehaviour>,
@@ -882,10 +1029,10 @@ async fn handle_response(
             // Request each tip transaction to sync the DAG
             for tip_id in tip_ids {
                 if let Some(peer) = peers.first() {
-                    swarm.behaviour_mut().request_response.send_request(
-                        peer,
-                        DisentangleRequest::GetTransaction(tip_id),
-                    );
+                    swarm
+                        .behaviour_mut()
+                        .request_response
+                        .send_request(peer, DisentangleRequest::GetTransaction(tip_id));
                 }
             }
         }
@@ -898,7 +1045,10 @@ async fn handle_response(
                     for parent_id in more {
                         if let Some(peer) = peers.first() {
                             let request = DisentangleRequest::GetTransaction(parent_id);
-                            swarm.behaviour_mut().request_response.send_request(peer, request);
+                            swarm
+                                .behaviour_mut()
+                                .request_response
+                                .send_request(peer, request);
                         }
                     }
                 } else {

@@ -2,8 +2,8 @@
 //!
 //! Uses bincode for efficient binary serialization.
 
-use disentangle_dag::{Transaction, NodeId};
-use serde::{Serialize, Deserialize};
+use disentangle_dag::{NodeId, Transaction};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

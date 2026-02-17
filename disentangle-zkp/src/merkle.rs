@@ -7,7 +7,7 @@
 use crate::types::AccountStateLeaf;
 use crate::ZkpError;
 use disentangle_crypto::hash::{sha3_256_multi, Hash256};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// A Merkle proof of membership for an account state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,10 +200,7 @@ mod tests {
 
     #[test]
     fn test_merkle_proof_invalid_root() {
-        let accounts = vec![
-            make_test_account(1, 100),
-            make_test_account(2, 200),
-        ];
+        let accounts = vec![make_test_account(1, 100), make_test_account(2, 200)];
         let tree = AccountMerkleTree::new(&accounts);
         let proof = tree.prove_membership(0).unwrap();
 
@@ -214,10 +211,7 @@ mod tests {
 
     #[test]
     fn test_merkle_root_determinism() {
-        let accounts = vec![
-            make_test_account(1, 100),
-            make_test_account(2, 200),
-        ];
+        let accounts = vec![make_test_account(1, 100), make_test_account(2, 200)];
         let tree1 = AccountMerkleTree::new(&accounts);
         let tree2 = AccountMerkleTree::new(&accounts);
         assert_eq!(tree1.root(), tree2.root());

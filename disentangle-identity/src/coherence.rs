@@ -4,8 +4,8 @@
 
 use crate::did::DID;
 use crate::graph::IdentityGraph;
-use disentangle_dag::{FixedPoint, SCALE, MIN_CURVATURE_WEIGHT, fp_mul};
-use serde::{Serialize, Deserialize};
+use disentangle_dag::{fp_mul, FixedPoint, MIN_CURVATURE_WEIGHT, SCALE};
+use serde::{Deserialize, Serialize};
 
 pub const COHERENCE_HALF_LIFE: u64 = 10_000;
 
@@ -74,7 +74,7 @@ impl CoherenceProfile {
             mean_local_curvature,
             relational_diversity: positive_curvature_count,
             temporal_depth: current_depth.saturating_sub(first_seen_depth),
-            capability_coherence: 0, // Placeholder for Phase 1
+            capability_coherence: 0,   // Placeholder for Phase 1
             introduction_coherence: 0, // Placeholder for Phase 1
             last_active_depth: current_depth,
         }
@@ -151,7 +151,7 @@ impl CoherenceProfile {
 mod tests {
     use super::*;
     use crate::graph::IdentityGraph;
-    use crate::transactions::{IntroductionTransaction, IntroductionContext};
+    use crate::transactions::{IntroductionContext, IntroductionTransaction};
     use disentangle_crypto::signature::generate_keypair;
 
     #[test]

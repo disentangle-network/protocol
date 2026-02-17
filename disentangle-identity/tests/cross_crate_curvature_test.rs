@@ -12,11 +12,13 @@
 //! This test constructs equivalent topologies in both representations and verifies
 //! they produce the same curvature values, ensuring the two implementations stay in sync.
 
-use disentangle_dag::{TransactionDAG, Transaction, NodeId, SCALE, Hash256, FixedPoint, fp_from_ratio};
-use disentangle_identity::{IdentityGraph, DID, IntroductionTransaction, IntroductionContext};
-use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_crypto::hash::sha3_256;
-use disentangle_crypto::types::{Nullifier, Epoch};
+use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
+use disentangle_crypto::types::{Epoch, Nullifier};
+use disentangle_dag::{
+    fp_from_ratio, FixedPoint, Hash256, NodeId, Transaction, TransactionDAG, SCALE,
+};
+use disentangle_identity::{IdentityGraph, IntroductionContext, IntroductionTransaction, DID};
 use disentangle_simhash::SimHash;
 
 /// Helper: create a test transaction for the DAG
@@ -28,7 +30,7 @@ fn make_dag_tx(
 ) -> Transaction {
     let (sk, pk) = keypair;
     let history_root = sha3_256(format!("history:{}", name).as_bytes());
-    let parent_hashes: Vec<Hash256> = parents.iter().cloned().collect();
+    let parent_hashes: Vec<Hash256> = parents.to_vec();
     let simhash = SimHash::from_structural(&parent_hashes, &history_root);
     let nullifier = Nullifier::compute(
         &sha3_256(format!("secret:{}", name).as_bytes()),
@@ -140,19 +142,27 @@ fn test_curvature_formula_equivalence_shared_neighbors() {
     });
 
     let id_curvature = id_graph.identity_curvature(&did_a, &did_b);
-    println!("    Identity curvature (A, B): {} (scaled: {:.4})",
-        id_curvature, id_curvature as f64 / SCALE as f64);
+    println!(
+        "    Identity curvature (A, B): {} (scaled: {:.4})",
+        id_curvature,
+        id_curvature as f64 / SCALE as f64
+    );
 
     // Verify that the identity curvature matches the manual Jaccard computation.
     // Neighbors(A) = {C, D}, Neighbors(B) = {C, D}
     // Intersection = {C, D} = 2, Union = {C, D} = 2
     // Jaccard = 2/2 = 1.0, kappa = 2*1.0 - 1 = 1.0
     let expected = jaccard_curvature(&["C", "D"], &["C", "D"]);
-    println!("    Expected (manual Jaccard): {} (scaled: {:.4})",
-        expected, expected as f64 / SCALE as f64);
+    println!(
+        "    Expected (manual Jaccard): {} (scaled: {:.4})",
+        expected,
+        expected as f64 / SCALE as f64
+    );
 
-    assert_eq!(id_curvature, expected,
-        "Identity curvature should match manual Jaccard computation");
+    assert_eq!(
+        id_curvature, expected,
+        "Identity curvature should match manual Jaccard computation"
+    );
 
     // --- DAG side ---
     // Build a DAG where two nodes have the same ancestor overlap.
@@ -190,18 +200,29 @@ fn test_curvature_formula_equivalence_shared_neighbors() {
     dag.insert_genesis(v_tx);
 
     let dag_curvature = dag.discrete_curvature(&u_id, &v_id);
-    println!("    DAG curvature (u, v): {} (scaled: {:.4})",
-        dag_curvature, dag_curvature as f64 / SCALE as f64);
+    println!(
+        "    DAG curvature (u, v): {} (scaled: {:.4})",
+        dag_curvature,
+        dag_curvature as f64 / SCALE as f64
+    );
 
     // Both should yield maximum Jaccard curvature (1.0) = SCALE
-    assert_eq!(dag_curvature, SCALE,
-        "DAG curvature should equal SCALE (1.0) for identical ancestor sets");
-    assert_eq!(id_curvature, SCALE,
-        "Identity curvature should equal SCALE (1.0) for identical neighbor sets");
-    assert_eq!(dag_curvature, id_curvature,
-        "DAG and identity curvature should be identical for equivalent structures");
+    assert_eq!(
+        dag_curvature, SCALE,
+        "DAG curvature should equal SCALE (1.0) for identical ancestor sets"
+    );
+    assert_eq!(
+        id_curvature, SCALE,
+        "Identity curvature should equal SCALE (1.0) for identical neighbor sets"
+    );
+    assert_eq!(
+        dag_curvature, id_curvature,
+        "DAG and identity curvature should be identical for equivalent structures"
+    );
 
-    println!("\nTEST PASSED: Curvature formulas produce identical results for shared-neighbor case\n");
+    println!(
+        "\nTEST PASSED: Curvature formulas produce identical results for shared-neighbor case\n"
+    );
 }
 
 #[test]
@@ -252,17 +273,24 @@ fn test_curvature_formula_equivalence_disjoint() {
     });
 
     let id_curvature = id_graph.identity_curvature(&did_a, &did_b);
-    println!("    Identity curvature (A, B): {} (scaled: {:.4})",
-        id_curvature, id_curvature as f64 / SCALE as f64);
+    println!(
+        "    Identity curvature (A, B): {} (scaled: {:.4})",
+        id_curvature,
+        id_curvature as f64 / SCALE as f64
+    );
 
     // Neighbors(A) = {C}, Neighbors(B) = {D}
     // Intersection = 0, Union = {C, D} = 2
     // Jaccard = 0/2 = 0, kappa = 2*0 - 1 = -1.0 = -SCALE
     let expected = jaccard_curvature(&["C"], &["D"]);
-    assert_eq!(id_curvature, expected,
-        "Identity curvature should be -SCALE for disjoint neighbors");
-    assert_eq!(id_curvature, -SCALE,
-        "Identity curvature should be exactly -SCALE (-1.0)");
+    assert_eq!(
+        id_curvature, expected,
+        "Identity curvature should be -SCALE for disjoint neighbors"
+    );
+    assert_eq!(
+        id_curvature, -SCALE,
+        "Identity curvature should be exactly -SCALE (-1.0)"
+    );
 
     // --- DAG side ---
     // Two nodes with completely disjoint ancestor sets:
@@ -293,13 +321,20 @@ fn test_curvature_formula_equivalence_disjoint() {
     dag.insert_genesis(v_tx);
 
     let dag_curvature = dag.discrete_curvature(&u_id, &v_id);
-    println!("    DAG curvature (u, v): {} (scaled: {:.4})",
-        dag_curvature, dag_curvature as f64 / SCALE as f64);
+    println!(
+        "    DAG curvature (u, v): {} (scaled: {:.4})",
+        dag_curvature,
+        dag_curvature as f64 / SCALE as f64
+    );
 
-    assert_eq!(dag_curvature, -SCALE,
-        "DAG curvature should be -SCALE for disjoint ancestor sets");
-    assert_eq!(dag_curvature, id_curvature,
-        "DAG and identity curvature should match for disjoint case");
+    assert_eq!(
+        dag_curvature, -SCALE,
+        "DAG curvature should be -SCALE for disjoint ancestor sets"
+    );
+    assert_eq!(
+        dag_curvature, id_curvature,
+        "DAG and identity curvature should match for disjoint case"
+    );
 
     println!("\nTEST PASSED: Curvature formulas produce identical results for disjoint case\n");
 }
@@ -378,16 +413,24 @@ fn test_curvature_formula_equivalence_partial_overlap() {
     });
 
     let id_curvature = id_graph.identity_curvature(&did_a, &did_b);
-    println!("    Identity curvature (A, B): {} (scaled: {:.4})",
-        id_curvature, id_curvature as f64 / SCALE as f64);
+    println!(
+        "    Identity curvature (A, B): {} (scaled: {:.4})",
+        id_curvature,
+        id_curvature as f64 / SCALE as f64
+    );
 
     // Manual: intersection=1, union=3, Jaccard=1/3, kappa=2/3-1=-1/3
     let expected = jaccard_curvature(&["C", "D"], &["C", "E"]);
-    println!("    Expected (manual): {} (scaled: {:.4})",
-        expected, expected as f64 / SCALE as f64);
+    println!(
+        "    Expected (manual): {} (scaled: {:.4})",
+        expected,
+        expected as f64 / SCALE as f64
+    );
 
-    assert_eq!(id_curvature, expected,
-        "Identity curvature should match manual Jaccard for partial overlap");
+    assert_eq!(
+        id_curvature, expected,
+        "Identity curvature should match manual Jaccard for partial overlap"
+    );
 
     // --- DAG side ---
     // Build a DAG where ancestors(u, 1) = {P_shared, P_only_u}
@@ -440,8 +483,11 @@ fn test_curvature_formula_equivalence_partial_overlap() {
     dag.insert_genesis(v_tx);
 
     let dag_curvature = dag.discrete_curvature(&u_id, &v_id);
-    println!("    DAG curvature (u, v): {} (scaled: {:.4})",
-        dag_curvature, dag_curvature as f64 / SCALE as f64);
+    println!(
+        "    DAG curvature (u, v): {} (scaled: {:.4})",
+        dag_curvature,
+        dag_curvature as f64 / SCALE as f64
+    );
 
     // Both should be approximately -1/3 * SCALE
     // Allow a tolerance of 1 for fixed-point rounding
@@ -449,14 +495,18 @@ fn test_curvature_formula_equivalence_partial_overlap() {
     assert!(
         (dag_curvature - id_curvature).abs() <= tolerance,
         "DAG curvature ({}) and identity curvature ({}) should match within tolerance {}",
-        dag_curvature, id_curvature, tolerance,
+        dag_curvature,
+        id_curvature,
+        tolerance,
     );
 
     // Also verify against the manual computation
     assert!(
         (dag_curvature - expected).abs() <= tolerance,
         "DAG curvature ({}) should match manual Jaccard ({}) within tolerance {}",
-        dag_curvature, expected, tolerance,
+        dag_curvature,
+        expected,
+        tolerance,
     );
 
     println!("\nTEST PASSED: Curvature formulas produce equivalent results for partial overlap\n");
@@ -481,7 +531,10 @@ fn test_curvature_formula_equivalence_empty_neighbors() {
 
     let id_curvature = id_graph.identity_curvature(&did_a, &did_b);
     println!("    Identity curvature (no neighbors): {}", id_curvature);
-    assert_eq!(id_curvature, 0, "Identity curvature should be 0 for nodes with no neighbors");
+    assert_eq!(
+        id_curvature, 0,
+        "Identity curvature should be 0 for nodes with no neighbors"
+    );
 
     // --- DAG side ---
     // Two genesis transactions with no parents
@@ -499,10 +552,15 @@ fn test_curvature_formula_equivalence_empty_neighbors() {
 
     let dag_curvature = dag.discrete_curvature(&u_id, &v_id);
     println!("    DAG curvature (no ancestors): {}", dag_curvature);
-    assert_eq!(dag_curvature, 0, "DAG curvature should be 0 for nodes with no ancestors");
+    assert_eq!(
+        dag_curvature, 0,
+        "DAG curvature should be 0 for nodes with no ancestors"
+    );
 
-    assert_eq!(dag_curvature, id_curvature,
-        "Both formulas should return 0 for the empty case");
+    assert_eq!(
+        dag_curvature, id_curvature,
+        "Both formulas should return 0 for the empty case"
+    );
 
     println!("\nTEST PASSED: Curvature formulas agree on empty neighbor sets\n");
 }

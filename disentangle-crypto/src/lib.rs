@@ -12,15 +12,18 @@
 //!
 //! All primitives are quantum-resistant and deterministic.
 
-pub mod signature;
-pub mod kem;
 pub mod hash;
+pub mod kem;
+pub mod signature;
 pub mod types;
 
-pub use signature::{SigningKey, VerifyingKey, Signature, sign, verify, generate_keypair};
-pub use kem::{EncapsulationKey, DecapsulationKey, Ciphertext, SharedSecret, encapsulate, decapsulate, generate_kem_keypair};
 pub use hash::{sha3_256, sha3_256_multi, Hash256};
-pub use types::{PublicKey, SecretKey, NodeId};
+pub use kem::{
+    decapsulate, encapsulate, generate_kem_keypair, Ciphertext, DecapsulationKey, EncapsulationKey,
+    SharedSecret,
+};
+pub use signature::{generate_keypair, sign, verify, Signature, SigningKey, VerifyingKey};
+pub use types::{NodeId, PublicKey, SecretKey};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {

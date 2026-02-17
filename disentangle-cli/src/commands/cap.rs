@@ -1,7 +1,7 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::keys;
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 /// Resolve signing key: use explicit --signing-key-hex if given, otherwise load from --did key storage.
 fn resolve_signing_key(signing_key_hex: Option<String>, did: Option<&String>) -> CliResult<String> {
@@ -9,8 +9,7 @@ fn resolve_signing_key(signing_key_hex: Option<String>, did: Option<&String>) ->
         Some(sk) => Ok(sk),
         None => {
             let did = did.ok_or(CliError::MissingKey)?;
-            keys::load_key(did)?
-                .ok_or_else(|| CliError::KeyNotFound(did.clone()))
+            keys::load_key(did)?.ok_or_else(|| CliError::KeyNotFound(did.clone()))
         }
     }
 }
@@ -109,13 +108,9 @@ pub fn handle(cmd: CapCommands, client: &NodeClient, format: &OutputFormat) -> C
             let sk_hex = resolve_signing_key(signing_key_hex, did.as_ref().or(Some(&issuer_did)))?;
 
             let subject_val: serde_json::Value = serde_json::from_str(&subject)
-                .map_err(|e| CliError::NodeError(
-                    format!("Invalid subject JSON: {}", e)
-                ))?;
+                .map_err(|e| CliError::NodeError(format!("Invalid subject JSON: {}", e)))?;
             let constraints_val: serde_json::Value = serde_json::from_str(&constraints)
-                .map_err(|e| CliError::NodeError(
-                    format!("Invalid constraints JSON: {}", e)
-                ))?;
+                .map_err(|e| CliError::NodeError(format!("Invalid constraints JSON: {}", e)))?;
 
             let body = serde_json::json!({
                 "issuer_did": issuer_did,
@@ -135,7 +130,8 @@ pub fn handle(cmd: CapCommands, client: &NodeClient, format: &OutputFormat) -> C
             did,
             delegatee_did,
         } => {
-            let sk_hex = resolve_signing_key(delegator_sk_hex, did.as_ref().or(Some(&delegator_did)))?;
+            let sk_hex =
+                resolve_signing_key(delegator_sk_hex, did.as_ref().or(Some(&delegator_did)))?;
 
             let body = serde_json::json!({
                 "capability_id_hex": capability_id,

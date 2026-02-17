@@ -3,7 +3,7 @@
 //! Uses SHA3-256 for post-quantum security (collision-resistant binding).
 
 use disentangle_crypto::hash::{sha3_256_multi, Hash256};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub const BLINDING_BYTES: usize = 32;
 pub type Blinding = [u8; BLINDING_BYTES];
@@ -20,11 +20,7 @@ impl AmountCommitment {
     /// * `amount` - The amount being committed (in smallest units)
     /// * `blinding` - 32-byte random blinding factor (must be kept secret)
     pub fn commit(amount: u64, blinding: &Blinding) -> Self {
-        let hash = sha3_256_multi(&[
-            b"AMOUNT_COMMIT_V1",
-            &amount.to_le_bytes(),
-            blinding,
-        ]);
+        let hash = sha3_256_multi(&[b"AMOUNT_COMMIT_V1", &amount.to_le_bytes(), blinding]);
         Self(hash)
     }
 

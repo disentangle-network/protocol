@@ -2,13 +2,12 @@
 //!
 //! Allows sending to recipients without revealing their public key on-chain.
 
-use disentangle_crypto::kem::{
-    EncapsulationKey, DecapsulationKey, Ciphertext, SharedSecret,
-    encapsulate, decapsulate,
-};
-use disentangle_crypto::hash::{sha3_256_multi, Hash256};
-use serde::{Serialize, Deserialize};
 use crate::confidential::AmountCommitment;
+use disentangle_crypto::hash::{sha3_256_multi, Hash256};
+use disentangle_crypto::kem::{
+    decapsulate, encapsulate, Ciphertext, DecapsulationKey, EncapsulationKey, SharedSecret,
+};
+use serde::{Deserialize, Serialize};
 
 /// A stealth address derived from a KEM shared secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,11 +16,7 @@ pub struct StealthAddress(pub Hash256);
 impl StealthAddress {
     /// Derive a stealth address from a shared secret.
     fn from_shared_secret(shared_secret: &SharedSecret, domain: &[u8]) -> Self {
-        let hash = sha3_256_multi(&[
-            b"STEALTH_ADDR_V1",
-            domain,
-            shared_secret.as_bytes(),
-        ]);
+        let hash = sha3_256_multi(&[b"STEALTH_ADDR_V1", domain, shared_secret.as_bytes()]);
         Self(hash)
     }
 
@@ -58,8 +53,8 @@ pub fn recover_stealth_address(
     recipient_dk: &DecapsulationKey,
     ciphertext: &Ciphertext,
 ) -> Result<(StealthAddress, SharedSecret), StealthError> {
-    let shared_secret = decapsulate(recipient_dk, ciphertext)
-        .map_err(|_| StealthError::DecapsulationFailed)?;
+    let shared_secret =
+        decapsulate(recipient_dk, ciphertext).map_err(|_| StealthError::DecapsulationFailed)?;
     let stealth_addr = StealthAddress::from_shared_secret(&shared_secret, b"");
     Ok((stealth_addr, shared_secret))
 }
@@ -84,11 +79,7 @@ impl ConfidentialOutput {
     /// * `amount` - The amount to send
     /// * `blinding` - Random blinding factor for commitment
     /// * `recipient_ek` - Recipient's encapsulation key
-    pub fn new(
-        amount: u64,
-        blinding: [u8; 32],
-        recipient_ek: &EncapsulationKey,
-    ) -> Self {
+    pub fn new(amount: u64, blinding: [u8; 32], recipient_ek: &EncapsulationKey) -> Self {
         let commitment = AmountCommitment::commit(amount, &blinding);
         let (stealth_address, ephemeral_ciphertext, shared_secret) =
             generate_stealth_address(recipient_ek);
@@ -239,7 +230,7 @@ mod tests {
 
         assert!(result.is_err());
         match result {
-            Err(StealthError::NotForRecipient) => {},
+            Err(StealthError::NotForRecipient) => {}
             _ => panic!("Expected NotForRecipient error"),
         }
     }
@@ -265,7 +256,7 @@ mod tests {
         let result = decrypt_amount(&wrong_data, &key);
         assert!(result.is_err());
         match result {
-            Err(StealthError::InvalidEncryptedData) => {},
+            Err(StealthError::InvalidEncryptedData) => {}
             _ => panic!("Expected InvalidEncryptedData error"),
         }
     }

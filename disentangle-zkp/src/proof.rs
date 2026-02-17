@@ -6,7 +6,7 @@
 use crate::circuit::{ReputationAir, ReputationWitness};
 use crate::merkle::AccountMerkleTree;
 use crate::types::{AccountStateLeaf, ReputationClaim};
-use crate::{ZkpError, Result};
+use crate::{Result, ZkpError};
 use disentangle_crypto::hash::Hash256;
 
 use p3_matrix::Matrix;
@@ -180,18 +180,16 @@ fn verify_merkle_path(witness: &ReputationWitness) -> bool {
 
 /// Serialize witness as proof (placeholder for actual STARK proof).
 fn serialize_witness_as_proof(witness: &ReputationWitness) -> Result<Vec<u8>> {
-    bincode::serialize(witness)
-        .map_err(|e| ZkpError::SerializationError(e.to_string()))
+    bincode::serialize(witness).map_err(|e| ZkpError::SerializationError(e.to_string()))
 }
 
 /// Deserialize witness from proof (placeholder for actual STARK verification).
 fn deserialize_witness_from_proof(data: &[u8]) -> Result<ReputationWitness> {
-    bincode::deserialize(data)
-        .map_err(|e| ZkpError::SerializationError(e.to_string()))
+    bincode::deserialize(data).map_err(|e| ZkpError::SerializationError(e.to_string()))
 }
 
 // Add Serialize/Deserialize to ReputationWitness for the placeholder impl
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 impl Serialize for ReputationWitness {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -203,7 +201,14 @@ impl Serialize for ReputationWitness {
         s.serialize_field("reputation_score", &self.reputation_score)?;
         s.serialize_field("threshold", &self.threshold)?;
         s.serialize_field("leaf_hash", &self.leaf_hash.to_vec())?;
-        s.serialize_field("merkle_siblings", &self.merkle_siblings.iter().map(|h| h.to_vec()).collect::<Vec<_>>())?;
+        s.serialize_field(
+            "merkle_siblings",
+            &self
+                .merkle_siblings
+                .iter()
+                .map(|h| h.to_vec())
+                .collect::<Vec<_>>(),
+        )?;
         s.serialize_field("path_bits", &self.path_bits)?;
         s.serialize_field("merkle_root", &self.merkle_root.to_vec())?;
         s.end()
@@ -227,13 +232,21 @@ impl<'de> Deserialize<'de> for ReputationWitness {
 
         let helper = Helper::deserialize(deserializer)?;
 
-        let leaf_hash: [u8; 32] = helper.leaf_hash.try_into()
+        let leaf_hash: [u8; 32] = helper
+            .leaf_hash
+            .try_into()
             .map_err(|_| serde::de::Error::custom("invalid leaf_hash length"))?;
-        let merkle_root: [u8; 32] = helper.merkle_root.try_into()
+        let merkle_root: [u8; 32] = helper
+            .merkle_root
+            .try_into()
             .map_err(|_| serde::de::Error::custom("invalid merkle_root length"))?;
-        let merkle_siblings: Vec<[u8; 32]> = helper.merkle_siblings
+        let merkle_siblings: Vec<[u8; 32]> = helper
+            .merkle_siblings
             .into_iter()
-            .map(|v| v.try_into().map_err(|_| serde::de::Error::custom("invalid sibling length")))
+            .map(|v| {
+                v.try_into()
+                    .map_err(|_| serde::de::Error::custom("invalid sibling length"))
+            })
             .collect::<std::result::Result<_, _>>()?;
 
         Ok(ReputationWitness {
@@ -281,7 +294,10 @@ mod tests {
 
         // Account 2 has reputation 50, try to prove >= 100
         let result = prover.prove(2, &accounts[2], 100, 1);
-        assert!(matches!(result, Err(ZkpError::InsufficientReputation { .. })));
+        assert!(matches!(
+            result,
+            Err(ZkpError::InsufficientReputation { .. })
+        ));
     }
 
     #[test]

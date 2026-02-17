@@ -6,10 +6,10 @@
 
 use disentangle_crypto::hash::sha3_256_multi;
 use disentangle_crypto::kem::{
-    generate_kem_keypair, encapsulate, decapsulate,
-    EncapsulationKey, DecapsulationKey, Ciphertext, SharedSecret,
+    decapsulate, encapsulate, generate_kem_keypair, Ciphertext, DecapsulationKey, EncapsulationKey,
+    SharedSecret,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Post-quantum re-keying protocol messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub enum PqRekeyMessage {
     /// Step 1: Initiator sends their encapsulation key
     Request {
         /// Initiator's ephemeral Kyber1024 encapsulation key
-        initiator_ek: Vec<u8>,  // 1568 bytes
+        initiator_ek: Vec<u8>, // 1568 bytes
         /// Random nonce for session binding
         nonce: [u8; 32],
         /// Protocol version for future upgrades
@@ -26,23 +26,21 @@ pub enum PqRekeyMessage {
     /// Step 2: Responder sends back both ciphertexts
     Response {
         /// Responder's ephemeral encapsulation key
-        responder_ek: Vec<u8>,  // 1568 bytes
+        responder_ek: Vec<u8>, // 1568 bytes
         /// Ciphertext encapsulating to initiator's key
-        initiator_ct: Vec<u8>,  // 1568 bytes
+        initiator_ct: Vec<u8>, // 1568 bytes
         /// Ciphertext encapsulating to responder's key (initiator will compute)
-        responder_ct: Vec<u8>,  // 1568 bytes
+        responder_ct: Vec<u8>, // 1568 bytes
     },
     /// Step 3: Initiator confirms key derivation succeeded
     Confirm {
         /// Ciphertext encapsulating to responder's key
-        responder_ct: Vec<u8>,  // 1568 bytes
+        responder_ct: Vec<u8>, // 1568 bytes
         /// MAC over (nonce || "PQ_REKEY_CONFIRM") using derived key
         confirmation_mac: [u8; 32],
     },
     /// Failure: one side couldn't complete re-key
-    Error {
-        reason: PqRekeyError,
-    },
+    Error { reason: PqRekeyError },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,8 +78,8 @@ pub struct PqSessionKeys {
 /// Combines both Kyber1024 shared secrets with the session nonce
 /// and derives separate keys for each direction using SHA3-256 with domain separation.
 pub fn derive_pq_session_keys_initiator(
-    initiator_ss: &SharedSecret,  // From responder encapsulating to initiator
-    responder_ss: &SharedSecret,  // From initiator encapsulating to responder
+    initiator_ss: &SharedSecret, // From responder encapsulating to initiator
+    responder_ss: &SharedSecret, // From initiator encapsulating to responder
     nonce: &[u8; 32],
 ) -> PqSessionKeys {
     // Combine both shared secrets with nonce
@@ -109,8 +107,8 @@ pub fn derive_pq_session_keys_initiator(
 /// Combines both Kyber1024 shared secrets with the session nonce
 /// and derives separate keys for each direction using SHA3-256 with domain separation.
 pub fn derive_pq_session_keys_responder(
-    initiator_ss: &SharedSecret,  // From responder encapsulating to initiator
-    responder_ss: &SharedSecret,  // From initiator encapsulating to responder
+    initiator_ss: &SharedSecret, // From responder encapsulating to initiator
+    responder_ss: &SharedSecret, // From initiator encapsulating to responder
     nonce: &[u8; 32],
 ) -> PqSessionKeys {
     // Combine both shared secrets with nonce
@@ -149,7 +147,11 @@ pub fn process_rekey_request(
     request: &PqRekeyMessage,
 ) -> Result<(PqRekeyMessage, DecapsulationKey, SharedSecret), PqRekeyError> {
     match request {
-        PqRekeyMessage::Request { initiator_ek, version, .. } => {
+        PqRekeyMessage::Request {
+            initiator_ek,
+            version,
+            ..
+        } => {
             if *version != 1 {
                 return Err(PqRekeyError::UnsupportedVersion);
             }
@@ -184,14 +186,18 @@ pub fn process_rekey_response(
     nonce: &[u8; 32],
 ) -> Result<(PqRekeyMessage, PqSessionKeys), PqRekeyError> {
     match response {
-        PqRekeyMessage::Response { responder_ek, initiator_ct, .. } => {
+        PqRekeyMessage::Response {
+            responder_ek,
+            initiator_ct,
+            ..
+        } => {
             // Parse responder's encapsulation key
             let responder_ek = EncapsulationKey::from_bytes(responder_ek)
                 .map_err(|_| PqRekeyError::InvalidKeyLength)?;
 
             // Decapsulate initiator_ct with our key
-            let initiator_ct = Ciphertext::from_bytes(initiator_ct)
-                .map_err(|_| PqRekeyError::InvalidKeyLength)?;
+            let initiator_ct =
+                Ciphertext::from_bytes(initiator_ct).map_err(|_| PqRekeyError::InvalidKeyLength)?;
             let initiator_ss = decapsulate(initiator_dk, &initiator_ct)
                 .map_err(|_| PqRekeyError::DecapsulationFailed)?;
 
@@ -202,11 +208,7 @@ pub fn process_rekey_response(
             let keys = derive_pq_session_keys_initiator(&initiator_ss, &responder_ss, nonce);
 
             // Create confirmation MAC
-            let confirmation_mac = sha3_256_multi(&[
-                &keys.send_key,
-                nonce,
-                b"PQ_REKEY_CONFIRM",
-            ]);
+            let confirmation_mac = sha3_256_multi(&[&keys.send_key, nonce, b"PQ_REKEY_CONFIRM"]);
 
             let confirm = PqRekeyMessage::Confirm {
                 responder_ct: responder_ct.to_bytes(),
@@ -230,10 +232,13 @@ pub fn verify_rekey_confirm(
     nonce: &[u8; 32],
 ) -> Result<PqSessionKeys, PqRekeyError> {
     match confirm {
-        PqRekeyMessage::Confirm { responder_ct, confirmation_mac } => {
+        PqRekeyMessage::Confirm {
+            responder_ct,
+            confirmation_mac,
+        } => {
             // Parse and decapsulate responder_ct to get responder_ss
-            let responder_ct = Ciphertext::from_bytes(responder_ct)
-                .map_err(|_| PqRekeyError::InvalidKeyLength)?;
+            let responder_ct =
+                Ciphertext::from_bytes(responder_ct).map_err(|_| PqRekeyError::InvalidKeyLength)?;
             let responder_ss = decapsulate(responder_dk, &responder_ct)
                 .map_err(|_| PqRekeyError::DecapsulationFailed)?;
 
@@ -241,11 +246,7 @@ pub fn verify_rekey_confirm(
             let keys = derive_pq_session_keys_responder(initiator_ss, &responder_ss, nonce);
 
             // Compute expected MAC (from responder's perspective, use recv_key)
-            let expected_mac = sha3_256_multi(&[
-                &keys.recv_key,
-                nonce,
-                b"PQ_REKEY_CONFIRM",
-            ]);
+            let expected_mac = sha3_256_multi(&[&keys.recv_key, nonce, b"PQ_REKEY_CONFIRM"]);
 
             if confirmation_mac == &expected_mac {
                 Ok(keys)
@@ -272,8 +273,16 @@ mod tests {
 
         match (&request, &deserialized) {
             (
-                PqRekeyMessage::Request { initiator_ek: ek1, nonce: n1, version: v1 },
-                PqRekeyMessage::Request { initiator_ek: ek2, nonce: n2, version: v2 },
+                PqRekeyMessage::Request {
+                    initiator_ek: ek1,
+                    nonce: n1,
+                    version: v1,
+                },
+                PqRekeyMessage::Request {
+                    initiator_ek: ek2,
+                    nonce: n2,
+                    version: v2,
+                },
             ) => {
                 assert_eq!(ek1, ek2);
                 assert_eq!(n1, n2);
@@ -302,7 +311,8 @@ mod tests {
         let ss1_recovered = decapsulate(&dk1, &ct1).unwrap();
         let ss2_recovered = decapsulate(&dk2, &ct2).unwrap();
 
-        let keys_recovered = derive_pq_session_keys_initiator(&ss1_recovered, &ss2_recovered, &nonce);
+        let keys_recovered =
+            derive_pq_session_keys_initiator(&ss1_recovered, &ss2_recovered, &nonce);
         assert_eq!(keys1.send_key, keys_recovered.send_key);
         assert_eq!(keys1.recv_key, keys_recovered.recv_key);
     }
@@ -340,12 +350,8 @@ mod tests {
             process_rekey_response(&response, &initiator_dk, &nonce).unwrap();
 
         // Responder verifies confirmation and derives session keys
-        let responder_keys = verify_rekey_confirm(
-            &confirm,
-            &responder_dk,
-            &initiator_ss_responder,
-            &nonce
-        ).unwrap();
+        let responder_keys =
+            verify_rekey_confirm(&confirm, &responder_dk, &initiator_ss_responder, &nonce).unwrap();
 
         // Verify keys match (initiator's send = responder's recv)
         assert_eq!(initiator_keys.send_key, responder_keys.recv_key);
@@ -388,13 +394,13 @@ mod tests {
         let initiator_keys = derive_pq_session_keys_initiator(
             &initiator_ss_by_initiator,
             &responder_ss_by_initiator,
-            &nonce
+            &nonce,
         );
 
         let responder_keys = derive_pq_session_keys_responder(
             &initiator_ss_by_responder,
             &responder_ss_by_responder,
-            &nonce
+            &nonce,
         );
 
         // Step 7: Verify keys match (send/recv are swapped)

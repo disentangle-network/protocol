@@ -1,6 +1,6 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum TxCommands {
@@ -40,7 +40,11 @@ pub enum TxCommands {
 
 pub fn handle(cmd: TxCommands, client: &NodeClient, format: &OutputFormat) -> CliResult<()> {
     match cmd {
-        TxCommands::Submit { sender, parents, data } => {
+        TxCommands::Submit {
+            sender,
+            parents,
+            data,
+        } => {
             let body = serde_json::json!({
                 "sender": sender,
                 "parents": parents,
@@ -87,10 +91,9 @@ pub fn handle(cmd: TxCommands, client: &NodeClient, format: &OutputFormat) -> Cl
             }
             Ok(())
         }
-        TxCommands::Mass { tx_id } => {
-            Err(CliError::NotImplemented(format!(
-                "Transaction mass query for {} is not yet supported by the node RPC", tx_id
-            )))
-        }
+        TxCommands::Mass { tx_id } => Err(CliError::NotImplemented(format!(
+            "Transaction mass query for {} is not yet supported by the node RPC",
+            tx_id
+        ))),
     }
 }

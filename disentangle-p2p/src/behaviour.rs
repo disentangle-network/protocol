@@ -1,5 +1,7 @@
 //! Network behavior combining Gossipsub + RequestResponse.
 
+use crate::pq_transport::PqRekeyMessage;
+use crate::wire::{GOSSIP_TOPIC, MAX_MESSAGE_SIZE, PQ_REKEY_PROTOCOL, PROTOCOL_VERSION};
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
     identify,
@@ -10,13 +12,12 @@ use libp2p::{
 };
 use std::collections::HashSet;
 use std::time::Duration;
-use crate::wire::{GOSSIP_TOPIC, PROTOCOL_VERSION, PQ_REKEY_PROTOCOL, MAX_MESSAGE_SIZE};
-use crate::pq_transport::PqRekeyMessage;
 
 #[derive(NetworkBehaviour)]
 pub struct DisentangleBehaviour {
     pub gossipsub: gossipsub::Behaviour,
-    pub request_response: request_response::cbor::Behaviour<DisentangleRequest, DisentangleResponse>,
+    pub request_response:
+        request_response::cbor::Behaviour<DisentangleRequest, DisentangleResponse>,
     pub pq_rekey: request_response::cbor::Behaviour<PqRekeyMessage, PqRekeyMessage>,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
@@ -79,23 +80,19 @@ impl DisentangleBehaviour {
             .max_transmit_size(MAX_MESSAGE_SIZE)
             .build()
             .expect("Valid gossipsub config");
-        let mut behaviour = gossipsub::Behaviour::new(
-            MessageAuthenticity::Signed(local_key.clone()),
-            config,
-        ).expect("Valid gossipsub behaviour");
+        let mut behaviour =
+            gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key.clone()), config)
+                .expect("Valid gossipsub behaviour");
         let topic = IdentTopic::new(GOSSIP_TOPIC);
         behaviour.subscribe(&topic).expect("Subscribe to topic");
         behaviour
     }
 
-
-    fn build_request_response() -> request_response::cbor::Behaviour<DisentangleRequest, DisentangleResponse> {
-        let protocols = [(
-            StreamProtocol::new(PROTOCOL_VERSION),
-            ProtocolSupport::Full,
-        )];
-        let config = request_response::Config::default()
-            .with_request_timeout(Duration::from_secs(30));
+    fn build_request_response(
+    ) -> request_response::cbor::Behaviour<DisentangleRequest, DisentangleResponse> {
+        let protocols = [(StreamProtocol::new(PROTOCOL_VERSION), ProtocolSupport::Full)];
+        let config =
+            request_response::Config::default().with_request_timeout(Duration::from_secs(30));
         request_response::cbor::Behaviour::new(protocols, config)
     }
 
@@ -104,8 +101,8 @@ impl DisentangleBehaviour {
             StreamProtocol::new(PQ_REKEY_PROTOCOL),
             ProtocolSupport::Full,
         )];
-        let config = request_response::Config::default()
-            .with_request_timeout(Duration::from_secs(10));
+        let config =
+            request_response::Config::default().with_request_timeout(Duration::from_secs(10));
         request_response::cbor::Behaviour::new(protocols, config)
     }
 
@@ -116,10 +113,7 @@ impl DisentangleBehaviour {
     }
 
     fn build_identify(local_key: &libp2p::identity::Keypair) -> identify::Behaviour {
-        let config = identify::Config::new(
-            PROTOCOL_VERSION.to_string(),
-            local_key.public(),
-        );
+        let config = identify::Config::new(PROTOCOL_VERSION.to_string(), local_key.public());
         identify::Behaviour::new(config)
     }
 

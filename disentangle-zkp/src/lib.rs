@@ -33,24 +33,26 @@
 //! ConfidentialTx --> BalanceCircuit + RangeCircuit --> ZkProof
 //! ```
 
-pub mod merkle;
-pub mod types;
-pub mod circuit;
-pub mod proof;
-pub mod confidential;
 pub mod balance_circuit;
+pub mod circuit;
+pub mod confidential;
+pub mod merkle;
+pub mod proof;
 pub mod range_circuit;
-pub mod stealth;
 pub mod reputation_bucket;
+pub mod stealth;
+pub mod types;
 
-pub use merkle::{AccountMerkleTree, MerkleProof};
-pub use types::{ReputationClaim, AccountStateLeaf, SupporterTag, DiversityAwareReputationClaim};
-pub use proof::{ReputationProver, ReputationVerifier};
-pub use confidential::{AmountCommitment, ConfidentialAmount, Blinding};
 pub use balance_circuit::{BalanceAir, BalanceWitness};
+pub use confidential::{AmountCommitment, Blinding, ConfidentialAmount};
+pub use merkle::{AccountMerkleTree, MerkleProof};
+pub use proof::{ReputationProver, ReputationVerifier};
 pub use range_circuit::{RangeAir, RangeWitness};
-pub use stealth::{StealthAddress, ConfidentialOutput, StealthError};
-pub use reputation_bucket::{ReputationBucket, BUCKET_WEIGHTS, reputation_to_bucket, bucket_weight};
+pub use reputation_bucket::{
+    bucket_weight, reputation_to_bucket, ReputationBucket, BUCKET_WEIGHTS,
+};
+pub use stealth::{ConfidentialOutput, StealthAddress, StealthError};
+pub use types::{AccountStateLeaf, DiversityAwareReputationClaim, ReputationClaim, SupporterTag};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZkpError {

@@ -1,7 +1,7 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::keys;
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum IdentityCommands {
@@ -31,7 +31,10 @@ pub enum IdentityCommands {
 
 pub fn handle(cmd: IdentityCommands, client: &NodeClient, format: &OutputFormat) -> CliResult<()> {
     match cmd {
-        IdentityCommands::Create { agent_type, display_name } => {
+        IdentityCommands::Create {
+            agent_type,
+            display_name,
+        } => {
             let body = serde_json::json!({
                 "agent_type": agent_type,
                 "display_name": display_name.unwrap_or_default(),
@@ -83,10 +86,9 @@ pub fn handle(cmd: IdentityCommands, client: &NodeClient, format: &OutputFormat)
 
             Ok(())
         }
-        IdentityCommands::Rotate { did } => {
-            Err(CliError::NotImplemented(format!(
-                "Key rotation for DID {} is not yet supported by the node RPC", did
-            )))
-        }
+        IdentityCommands::Rotate { did } => Err(CliError::NotImplemented(format!(
+            "Key rotation for DID {} is not yet supported by the node RPC",
+            did
+        ))),
     }
 }

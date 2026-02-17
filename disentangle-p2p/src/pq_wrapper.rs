@@ -3,11 +3,8 @@
 //! Wraps an existing transport stream with ChaCha20-Poly1305 AEAD encryption
 //! using post-quantum derived session keys.
 
-use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit,
-    aead::Aead,
-};
 use chacha20poly1305::aead::generic_array::GenericArray;
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
 use thiserror::Error;
 
 /// Errors that can occur during PQ encryption/decryption
@@ -65,7 +62,8 @@ impl PqEncryptedStream {
         let nonce = self.create_nonce(self.send_nonce);
 
         // Encrypt with AEAD
-        let ciphertext = self.send_cipher
+        let ciphertext = self
+            .send_cipher
             .encrypt(&nonce, plaintext)
             .map_err(|_| PqEncryptionError::EncryptionFailed)?;
 
@@ -88,7 +86,8 @@ impl PqEncryptedStream {
         let nonce = self.create_nonce(self.recv_nonce);
 
         // Decrypt with AEAD
-        let plaintext = self.recv_cipher
+        let plaintext = self
+            .recv_cipher
             .decrypt(&nonce, ciphertext)
             .map_err(|_| PqEncryptionError::DecryptionFailed)?;
 
@@ -188,7 +187,7 @@ mod tests {
         let mut sender = PqEncryptedStream::new(&send_key, &recv_key);
         let mut receiver = PqEncryptedStream::new(&recv_key, &send_key);
 
-        let messages = vec![
+        let messages = [
             b"Message 1".to_vec(),
             b"Message 2".to_vec(),
             b"Message 3".to_vec(),

@@ -6,7 +6,7 @@ use crate::did::DID;
 use crate::graph::IdentityGraph;
 use crate::IdentityError;
 use disentangle_crypto::hash::Hash256;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,13 @@ impl PetnameDB {
     }
 
     /// Bind a petname to a DID with a trust path
-    pub fn bind(&mut self, name: &str, did: &DID, trust_path: Vec<IntroductionStep>, depth: u64) -> Result<(), IdentityError> {
+    pub fn bind(
+        &mut self,
+        name: &str,
+        did: &DID,
+        trust_path: Vec<IntroductionStep>,
+        depth: u64,
+    ) -> Result<(), IdentityError> {
         // Check if name is already bound
         if self.petnames.contains_key(name) {
             return Err(IdentityError::PetnameAlreadyBound(name.to_string()));
@@ -76,7 +82,10 @@ impl PetnameDB {
             self.did_to_petname.remove(&entry.did);
             Ok(())
         } else {
-            Err(IdentityError::DIDNotFound(format!("Petname not found: {}", name)))
+            Err(IdentityError::DIDNotFound(format!(
+                "Petname not found: {}",
+                name
+            )))
         }
     }
 
@@ -95,7 +104,11 @@ impl PetnameDB {
     /// If an IdentityGraph is provided, edges with negative curvature are
     /// skipped during resolution (curvature gate per CCIP spec). This
     /// prevents Sybil entities from polluting the namespace.
-    pub fn resolve_edge_path(&self, path: &str, identity_graph: Option<&IdentityGraph>) -> Option<&DID> {
+    pub fn resolve_edge_path(
+        &self,
+        path: &str,
+        identity_graph: Option<&IdentityGraph>,
+    ) -> Option<&DID> {
         let parts: Vec<&str> = path.split("=>").map(|s| s.trim()).collect();
 
         if parts.len() < 2 {
@@ -129,14 +142,13 @@ impl PetnameDB {
 
     /// Add a proposed name with auto-disambiguation
     pub fn add_proposed_name(&mut self, did: &DID, name: &str) {
-        let count = self.proposed_name_counts.entry(name.to_string()).or_insert(0);
+        let count = self
+            .proposed_name_counts
+            .entry(name.to_string())
+            .or_insert(0);
         *count += 1;
 
-        let disambiguation = if *count > 1 {
-            Some(*count)
-        } else {
-            None
-        };
+        let disambiguation = if *count > 1 { Some(*count) } else { None };
 
         let proposed = ProposedName {
             name: name.to_string(),
@@ -144,7 +156,10 @@ impl PetnameDB {
             disambiguation,
         };
 
-        self.proposed_names.entry(did.clone()).or_default().push(proposed);
+        self.proposed_names
+            .entry(did.clone())
+            .or_default()
+            .push(proposed);
     }
 
     /// Get a display name for a DID (priority: petname > edge name > proposed > truncated DID)
@@ -183,7 +198,7 @@ impl PetnameDB {
         // 4. Truncated DID
         let method_id = did.method_specific_id();
         if method_id.len() > 16 {
-            format!("{}…{}", &method_id[..8], &method_id[method_id.len()-4..])
+            format!("{}…{}", &method_id[..8], &method_id[method_id.len() - 4..])
         } else {
             method_id.to_string()
         }
@@ -297,9 +312,9 @@ mod tests {
 
     #[test]
     fn test_edge_path_curvature_gate() {
-        use crate::graph::IdentityGraph;
         use crate::did::DID;
-        use crate::transactions::{IntroductionTransaction, IntroductionContext};
+        use crate::graph::IdentityGraph;
+        use crate::transactions::{IntroductionContext, IntroductionTransaction};
         use disentangle_crypto::signature::generate_keypair;
 
         let mut db = PetnameDB::new();
@@ -410,11 +425,21 @@ mod tests {
 
         let curv_bob = graph.identity_curvature(&alice, &bob);
         let curv_sybil = graph.identity_curvature(&alice, &sybil);
-        assert!(curv_bob >= 0, "alice->bob should have non-negative curvature, got {}", curv_bob);
-        assert!(curv_sybil < 0, "alice->sybil should have negative curvature, got {}", curv_sybil);
+        assert!(
+            curv_bob >= 0,
+            "alice->bob should have non-negative curvature, got {}",
+            curv_bob
+        );
+        assert!(
+            curv_sybil < 0,
+            "alice->sybil should have negative curvature, got {}",
+            curv_sybil
+        );
 
         // With curvature gate, sybil path should fail
         assert!(db.resolve_edge_path("Alice => Bob", Some(&graph)).is_some());
-        assert!(db.resolve_edge_path("Alice => Sybil", Some(&graph)).is_none());
+        assert!(db
+            .resolve_edge_path("Alice => Sybil", Some(&graph))
+            .is_none());
     }
 }

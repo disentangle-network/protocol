@@ -1,7 +1,7 @@
-pub mod identity;
-pub mod tx;
-pub mod curvature;
 pub mod cap;
-pub mod petname;
+pub mod curvature;
 pub mod gov;
+pub mod identity;
 pub mod node;
+pub mod petname;
+pub mod tx;

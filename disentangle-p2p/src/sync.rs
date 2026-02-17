@@ -3,11 +3,11 @@
 //! Implements "Recursive Pull" - when we receive a Tx but don't have
 //! its parents, we buffer the Tx and request the parents immediately.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::wire::WireTransaction;
 use disentangle_dag::{NodeId, Transaction, TransactionDAG};
 use disentangle_node::HelloWorldPoW;
-use crate::wire::WireTransaction;
-use tracing::{debug, warn, info};
+use std::collections::{HashMap, HashSet, VecDeque};
+use tracing::{debug, info, warn};
 
 pub const MAX_PENDING_DEPTH: usize = 10;
 pub const MAX_PENDING_TXS: usize = 10000;
@@ -56,7 +56,6 @@ impl SyncState {
         self.dag.get(id).is_some() || self.pending.contains_key(id)
     }
 
-
     pub fn receive_transaction(&mut self, wire_tx: WireTransaction) -> SyncResult {
         let tx = &wire_tx.tx;
         let tx_id = tx.id;
@@ -88,7 +87,8 @@ impl SyncState {
                 warn!("Pending buffer full, dropping tx {:?}", &tx_id[..4]);
                 return SyncResult::BufferFull;
             }
-            let parents_to_request: Vec<NodeId> = missing.iter()
+            let parents_to_request: Vec<NodeId> = missing
+                .iter()
                 .filter(|p| {
                     let count = self.request_counts.get(*p).unwrap_or(&0);
                     *count < MAX_REQUESTS_PER_PARENT
@@ -100,15 +100,17 @@ impl SyncState {
                 self.waiting_for.entry(*parent).or_default().insert(tx_id);
             }
             debug!("Tx {:?} waiting for {} parents", &tx_id[..4], missing.len());
-            self.pending.insert(tx_id, PendingTx {
-                wire_tx,
-                missing_parents: missing,
-                depth: 0,
-            });
+            self.pending.insert(
+                tx_id,
+                PendingTx {
+                    wire_tx,
+                    missing_parents: missing,
+                    depth: 0,
+                },
+            );
             SyncResult::NeedParents(parents_to_request)
         }
     }
-
 
     fn insert_and_propagate(&mut self, wire_tx: WireTransaction) {
         let tx_id = wire_tx.tx.id;
@@ -163,11 +165,10 @@ impl SyncState {
         }
     }
 
-
     pub fn get_transaction(&self, id: &NodeId) -> Option<WireTransaction> {
-        self.dag.get(id).map(|tx| {
-            WireTransaction::new(tx.clone(), 0)
-        })
+        self.dag
+            .get(id)
+            .map(|tx| WireTransaction::new(tx.clone(), 0))
     }
 
     pub fn parent_not_found(&mut self, parent_id: &NodeId) {

@@ -3,10 +3,10 @@
 //! Implements the did:disentangle DID method with support for Human, AGI, and Hybrid agent types.
 
 use disentangle_crypto::{
-    hash::{Hash256, sha3_256, sha3_256_multi},
-    signature::{VerifyingKey, Signature, SigningKey, sign, verify},
+    hash::{sha3_256, sha3_256_multi, Hash256},
+    signature::{sign, verify, Signature, SigningKey, VerifyingKey},
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub type CapabilityRef = String;
 
@@ -60,7 +60,12 @@ pub struct DIDDocument {
 
 impl DIDDocument {
     /// Create a new DID document signed with the provided key
-    pub fn new(signing_key: &SigningKey, verifying_key: &VerifyingKey, agent_type: AgentType, depth: u64) -> Self {
+    pub fn new(
+        signing_key: &SigningKey,
+        verifying_key: &VerifyingKey,
+        agent_type: AgentType,
+        depth: u64,
+    ) -> Self {
         let is_agi = matches!(agent_type, AgentType::AGI { .. });
         let did = DID::new(verifying_key, is_agi);
 
@@ -142,8 +147,13 @@ impl DIDDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentType {
     Human,
-    AGI { runtime_attestation: Option<RuntimeAttestation> },
-    Hybrid { human_did: DID, agi_did: DID },
+    AGI {
+        runtime_attestation: Option<RuntimeAttestation>,
+    },
+    Hybrid {
+        human_did: DID,
+        agi_did: DID,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,7 +290,9 @@ mod tests {
         let (sk, pk) = generate_keypair();
         let mut doc = DIDDocument::new(&sk, &pk, AgentType::Human, 500);
         // Tamper: change agent type from Human to AGI
-        doc.agent_type = AgentType::AGI { runtime_attestation: None };
+        doc.agent_type = AgentType::AGI {
+            runtime_attestation: None,
+        };
         assert!(!doc.verify());
     }
 
@@ -317,7 +329,10 @@ mod tests {
 
         // Verify the agent type was preserved
         match &doc.agent_type {
-            AgentType::Hybrid { human_did: h, agi_did: a } => {
+            AgentType::Hybrid {
+                human_did: h,
+                agi_did: a,
+            } => {
                 assert_eq!(h, &human_did);
                 assert_eq!(a, &agi_did);
             }
@@ -334,10 +349,7 @@ mod tests {
         let human_did = DID::new(&pk_human, false);
         let agi_did = DID::new(&pk_agi, true);
 
-        let agent_type = AgentType::Hybrid {
-            human_did,
-            agi_did,
-        };
+        let agent_type = AgentType::Hybrid { human_did, agi_did };
 
         let doc = DIDDocument::new(&sk, &pk, agent_type, 2000);
 
