@@ -12,15 +12,17 @@ RUN cargo build --release --bin disentangle-node
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies (ca-certificates for TLS, curl for healthchecks)
 RUN apt-get update && \
     apt-get install -y ca-certificates curl && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -r disentangle && \
+    useradd -r -g disentangle -u 1000 -d /data -m disentangle
 
-# Copy the compiled binary from builder stage
 COPY --from=builder /app/target/release/disentangle-node /usr/local/bin/
 
-# Expose P2P and RPC ports (defaults 9000 and 8000)
+USER 1000
+WORKDIR /data
+
 EXPOSE 9000 8000
 
 ENTRYPOINT ["disentangle-node"]
