@@ -1,0 +1,61 @@
+[package]
+name = "disentangle-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "P2P networking layer for Disentangle Protocol v0.3"
+
+[dependencies]
+disentangle-crypto = { path = "../disentangle-crypto" }
+disentangle-simhash = { path = "../disentangle-simhash" }
+disentangle-dag = { path = "../disentangle-dag" }
+disentangle-consensus = { path = "../disentangle-consensus" }
+disentangle-node = { path = "../disentangle-node" }
+
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "gossipsub",
+    "request-response",
+    "cbor",
+    "kad",
+    "noise",
+    "tcp",
+    "yamux",
+    "macros",
+    "identify",
+    "dns",
+] }
+tokio = { version = "1.0", features = ["full", "sync"] }
+bincode.workspace = true
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+sha3.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json = "1.0"
+hex.workspace = true
+chacha20poly1305 = "0.10"
+rand.workspace = true
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+ctrlc = "3.4"
+
+[[bin]]
+name = "disentangle-node"
+path = "src/bin/node.rs"
+
+[[bin]]
+name = "tx-generator"
+path = "src/bin/tx_generator.rs"
+
+[[bin]]
+name = "sybil-simulator"
+path = "src/bin/sybil_simulator.rs"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util", "macros"] }

@@ -1,0 +1,41 @@
+[package]
+name = "disentangle-zkp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Zero-knowledge proof system for Entangle Protocol using Plonky3 STARKs"
+
+[dependencies]
+# Workspace dependencies
+thiserror.workspace = true
+serde.workspace = true
+
+# Internal dependencies
+disentangle-crypto = { path = "../disentangle-crypto" }
+
+# Plonky3 STARK framework (Polygon)
+# Using specific versions compatible with each other
+p3-air = "0.2"
+p3-field = "0.2"
+p3-baby-bear = "0.2"
+p3-challenger = "0.2"
+p3-commit = "0.2"
+p3-dft = "0.2"
+p3-fri = "0.2"
+p3-matrix = "0.2"
+p3-merkle-tree = "0.2"
+p3-symmetric = "0.2"
+p3-uni-stark = "0.2"
+p3-util = "0.2"
+
+# Additional utilities
+rand.workspace = true
+bincode.workspace = true
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "reputation_proof"
+harness = false

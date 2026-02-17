@@ -1,0 +1,23 @@
+[package]
+name = "disentangle-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "disentangle"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+hex.workspace = true
+dirs = "5"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

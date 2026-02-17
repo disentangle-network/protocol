@@ -1,0 +1,46 @@
+# Disentangle Protocol - Cluster Configuration Example
+#
+# Copy this file to cluster.yaml and adjust for your deployment.
+
+cluster:
+  name: "disentangle-testnet"
+  version: "0.3.0"
+
+nodes:
+  # Genesis/bootstrap node
+  - name: node1
+    role: bootstrap
+    p2p_port: 9000
+    rpc_port: 8000
+    peers: []
+
+  # Follower nodes
+  - name: node2
+    role: follower
+    p2p_port: 9000
+    rpc_port: 8000
+    peers:
+      - "/dns4/node1/tcp/9000"
+
+  - name: node3
+    role: follower
+    p2p_port: 9000
+    rpc_port: 8000
+    peers:
+      - "/dns4/node1/tcp/9000"
+
+consensus:
+  # Bootstrap ramping: linear alpha ramp over blocks 1000-6000
+  bootstrap_start: 1000
+  bootstrap_end: 6000
+  confirmation_depth: 6
+
+  # Curvature parameters
+  curvature_method: "jaccard"
+  fixed_point_scale: 65536
+
+crypto:
+  # Post-quantum suite (NIST Level 5)
+  signature: "ML-DSA-87"      # Dilithium5
+  kem: "ML-KEM-1024"          # Kyber1024
+  hash: "SHA3-256"
