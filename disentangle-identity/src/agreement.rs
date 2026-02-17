@@ -2,8 +2,8 @@
 //!
 //! Bilateral commitments with measurable completion for agent coordination.
 
-use serde::{Serialize, Deserialize};
 use disentangle_crypto::hash::Hash256;
+use serde::{Deserialize, Serialize};
 
 /// Status of a service agreement
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,7 +13,10 @@ pub enum AgreementStatus {
     /// Active agreement, both parties have signed
     Active,
     /// Completed with success status and outcome hash
-    Completed { success: bool, outcome_hash: Hash256 },
+    Completed {
+        success: bool,
+        outcome_hash: Hash256,
+    },
     /// Expired due to deadline_depth exceeded
     Expired,
     /// Under dispute
@@ -119,7 +122,10 @@ impl ServiceAgreement {
     /// Mark the agreement as completed
     pub fn complete(&mut self, success: bool, outcome_hash: Hash256, completed_depth: u64) {
         if self.status == AgreementStatus::Active {
-            self.status = AgreementStatus::Completed { success, outcome_hash };
+            self.status = AgreementStatus::Completed {
+                success,
+                outcome_hash,
+            };
             self.completed_depth = Some(completed_depth);
         }
     }
@@ -127,7 +133,12 @@ impl ServiceAgreement {
     /// Check if the agreement has expired
     pub fn check_expiry(&mut self, current_depth: u64) {
         if let Some(deadline) = self.terms.deadline_depth {
-            if current_depth > deadline && matches!(self.status, AgreementStatus::Active | AgreementStatus::Proposed) {
+            if current_depth > deadline
+                && matches!(
+                    self.status,
+                    AgreementStatus::Active | AgreementStatus::Proposed
+                )
+            {
                 self.status = AgreementStatus::Expired;
             }
         }
@@ -217,7 +228,10 @@ mod tests {
         agreement.complete(true, outcome_hash, 200);
 
         match agreement.status {
-            AgreementStatus::Completed { success, outcome_hash: hash } => {
+            AgreementStatus::Completed {
+                success,
+                outcome_hash: hash,
+            } => {
                 assert!(success);
                 assert_eq!(hash, outcome_hash);
             }

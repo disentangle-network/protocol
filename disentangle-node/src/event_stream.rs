@@ -2,23 +2,57 @@
 //!
 //! Server-Sent Events (SSE) for reactive agent coordination.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 /// Events emitted by the node during identity and capability operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NodeEvent {
-    IdentityRegistered { did: String, agent_type: String },
-    CapabilityCreated { capability_id: String, issuer_did: String },
-    CapabilityDelegated { capability_id: String, from_did: String, to_did: String },
-    CapabilityExercised { capability_id: String, invoker_did: String, allowed: bool },
-    CapabilityRevoked { capability_id: String },
-    IntroductionCreated { introducer: String, introduced: String, curvature: f64 },
-    AgreementCreated { agreement_id: String, parties: Vec<String> },
-    AgreementCompleted { agreement_id: String, success: bool },
-    CoherenceChanged { did: String, old_score: f64, new_score: f64 },
-    TransactionMined { tx_id: String, depth: u64, dag_size: u64 },
+    IdentityRegistered {
+        did: String,
+        agent_type: String,
+    },
+    CapabilityCreated {
+        capability_id: String,
+        issuer_did: String,
+    },
+    CapabilityDelegated {
+        capability_id: String,
+        from_did: String,
+        to_did: String,
+    },
+    CapabilityExercised {
+        capability_id: String,
+        invoker_did: String,
+        allowed: bool,
+    },
+    CapabilityRevoked {
+        capability_id: String,
+    },
+    IntroductionCreated {
+        introducer: String,
+        introduced: String,
+        curvature: f64,
+    },
+    AgreementCreated {
+        agreement_id: String,
+        parties: Vec<String>,
+    },
+    AgreementCompleted {
+        agreement_id: String,
+        success: bool,
+    },
+    CoherenceChanged {
+        did: String,
+        old_score: f64,
+        new_score: f64,
+    },
+    TransactionMined {
+        tx_id: String,
+        depth: u64,
+        dag_size: u64,
+    },
 }
 
 /// Event bus for broadcasting node events to subscribers
@@ -69,16 +103,22 @@ mod tests {
 
         // Non-blocking receive for testing
         match rx.try_recv() {
-            Ok(received) => {
-                match (received, event) {
-                    (NodeEvent::IdentityRegistered { did: d1, agent_type: a1 },
-                     NodeEvent::IdentityRegistered { did: d2, agent_type: a2 }) => {
-                        assert_eq!(d1, d2);
-                        assert_eq!(a1, a2);
-                    }
-                    _ => panic!("Event type mismatch"),
+            Ok(received) => match (received, event) {
+                (
+                    NodeEvent::IdentityRegistered {
+                        did: d1,
+                        agent_type: a1,
+                    },
+                    NodeEvent::IdentityRegistered {
+                        did: d2,
+                        agent_type: a2,
+                    },
+                ) => {
+                    assert_eq!(d1, d2);
+                    assert_eq!(a1, a2);
                 }
-            }
+                _ => panic!("Event type mismatch"),
+            },
             Err(_) => panic!("Failed to receive event"),
         }
     }
@@ -112,7 +152,10 @@ mod tests {
         let parsed: NodeEvent = serde_json::from_str(&json).unwrap();
 
         match parsed {
-            NodeEvent::AgreementCreated { agreement_id, parties } => {
+            NodeEvent::AgreementCreated {
+                agreement_id,
+                parties,
+            } => {
                 assert_eq!(agreement_id, "agreement123");
                 assert_eq!(parties.len(), 2);
             }

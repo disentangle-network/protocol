@@ -3,26 +3,25 @@
 //! Axum route handlers for the Capability-Coherence Identity Protocol (CCIP).
 //! These handlers provide JSON-over-HTTP access to the IdentityStateManager.
 
-use axum::{
-    extract::{Path, State, Query},
-    http::StatusCode,
-    Json,
-    response::sse::{Event, Sse},
-};
-use std::sync::Arc;
-use std::collections::HashSet;
-use std::time::Duration;
-use std::convert::Infallible;
-use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use disentangle_crypto::signature::SigningKey;
-use crate::identity_state::IdentityStateManager;
 use crate::event_stream::{EventBus, NodeEvent};
-use futures::stream::Stream;
-use disentangle_identity::{
-    AgentType, CapabilitySubject, Constraint, RevocationScope,
-    ProposalType, VoteChoice,
+use crate::identity_state::IdentityStateManager;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::sse::{Event, Sse},
+    Json,
 };
+use disentangle_crypto::signature::SigningKey;
+use disentangle_identity::{
+    AgentType, CapabilitySubject, Constraint, ProposalType, RevocationScope, VoteChoice,
+};
+use futures::stream::Stream;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 
 pub type IdentityState = Arc<Mutex<IdentityStateManager>>;
 
@@ -59,34 +58,43 @@ pub async fn identity_register_handler(
 
     let agent_type = match req.agent_type.to_lowercase().as_str() {
         "human" => AgentType::Human,
-        "agi" => AgentType::AGI { runtime_attestation: None },
-        _ => return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid agent_type: must be 'human' or 'agi', got '{}'", req.agent_type),
-                coherence_score: None,
-            })
-        )),
+        "agi" => AgentType::AGI {
+            runtime_attestation: None,
+        },
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid agent_type: must be 'human' or 'agi', got '{}'",
+                        req.agent_type
+                    ),
+                    coherence_score: None,
+                }),
+            ))
+        }
     };
 
-    let (did, doc, sk) = mgr.register_did(agent_type)
-        .map_err(|e| (
+    let (did, doc, sk) = mgr.register_did(agent_type).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to register DID: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     let sk_hex = hex::encode(sk.to_bytes());
-    let doc_json = serde_json::to_value(&doc)
-        .map_err(|e| (
+    let doc_json = serde_json::to_value(&doc).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize document: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(RegisterResponse {
         did: did.0,
@@ -106,27 +114,27 @@ pub async fn identity_get_handler(
 ) -> Result<Json<GetIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let doc = mgr.get_did_document(&did)
-        .ok_or_else(|| (
+    let doc = mgr.get_did_document(&did).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("DID not found: {}", did),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let doc_json = serde_json::to_value(doc)
-        .map_err(|e| (
+    let doc_json = serde_json::to_value(doc).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize document: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    Ok(Json(GetIdentityResponse {
-        document: doc_json,
-    }))
+    Ok(Json(GetIdentityResponse { document: doc_json }))
 }
 
 #[derive(Serialize)]
@@ -160,23 +168,25 @@ pub async fn identity_deactivate_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let proof = hex::decode(&req.proof_hex)
-        .map_err(|_| (
+    let proof = hex::decode(&req.proof_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid proof hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    mgr.deactivate_did(&did, &proof)
-        .map_err(|e| (
+    mgr.deactivate_did(&did, &proof).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to deactivate DID: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -204,67 +214,73 @@ pub async fn capability_create_handler(
 ) -> Result<Json<CreateCapabilityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let sk_bytes = hex::decode(&req.signing_key_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let subject: CapabilitySubject = serde_json::from_value(req.subject)
-        .map_err(|e| (
+    let subject: CapabilitySubject = serde_json::from_value(req.subject).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid subject: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let constraints: Vec<Constraint> = req.constraints.iter()
+    let constraints: Vec<Constraint> = req
+        .constraints
+        .iter()
         .map(|v| serde_json::from_value(v.clone()))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid constraints: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid constraints: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
-    let cap = mgr.create_capability(
-        &req.issuer_did,
-        &sk,
-        subject,
-        constraints,
-        req.delegatable,
-    ).map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: format!("Failed to create capability: {}", e),
-            coherence_score: None,
-        })
-    ))?;
+    let cap = mgr
+        .create_capability(&req.issuer_did, &sk, subject, constraints, req.delegatable)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create capability: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     let cap_id_hex = hex::encode(cap.id);
-    let cap_json = serde_json::to_value(&cap)
-        .map_err(|e| (
+    let cap_json = serde_json::to_value(&cap).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize capability: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(CreateCapabilityResponse {
         capability_id_hex: cap_id_hex,
@@ -291,14 +307,15 @@ pub async fn capability_delegate_handler(
 ) -> Result<Json<DelegateCapabilityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let cap_id_bytes = hex::decode(&req.capability_id_hex)
-        .map_err(|_| (
+    let cap_id_bytes = hex::decode(&req.capability_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid capability ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if cap_id_bytes.len() != 32 {
         return Err((
@@ -306,52 +323,54 @@ pub async fn capability_delegate_handler(
             Json(ErrorResponse {
                 error: "Capability ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut cap_id = [0u8; 32];
     cap_id.copy_from_slice(&cap_id_bytes);
 
-    let sk_bytes = hex::decode(&req.delegator_sk_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.delegator_sk_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let delegation = mgr.delegate_capability(
-        &cap_id,
-        &req.delegator_did,
-        &sk,
-        &req.delegatee_did,
-    ).map_err(|e| (
-        StatusCode::FORBIDDEN,
-        Json(ErrorResponse {
-            error: format!("Failed to delegate capability: {}", e),
-            coherence_score: None,
-        })
-    ))?;
+    let delegation = mgr
+        .delegate_capability(&cap_id, &req.delegator_did, &sk, &req.delegatee_did)
+        .map_err(|e| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!("Failed to delegate capability: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
-    let delegation_json = serde_json::to_value(&delegation)
-        .map_err(|e| (
+    let delegation_json = serde_json::to_value(&delegation).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize delegation: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(DelegateCapabilityResponse {
         delegation: delegation_json,
@@ -376,14 +395,15 @@ pub async fn capability_invoke_handler(
 ) -> Result<Json<InvokeCapabilityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let cap_id_bytes = hex::decode(&req.capability_id_hex)
-        .map_err(|_| (
+    let cap_id_bytes = hex::decode(&req.capability_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid capability ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if cap_id_bytes.len() != 32 {
         return Err((
@@ -391,7 +411,7 @@ pub async fn capability_invoke_handler(
             Json(ErrorResponse {
                 error: "Capability ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
@@ -408,14 +428,14 @@ pub async fn capability_invoke_handler(
             Json(ErrorResponse {
                 error: "Capability invocation not permitted".to_string(),
                 coherence_score: None,
-            })
+            }),
         )),
         Err(e) => Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
                 error: format!("Failed to invoke capability: {}", e),
                 coherence_score: None,
-            })
+            }),
         )),
     }
 }
@@ -433,14 +453,15 @@ pub async fn capability_revoke_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let cap_id_bytes = hex::decode(&req.capability_id_hex)
-        .map_err(|_| (
+    let cap_id_bytes = hex::decode(&req.capability_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid capability ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if cap_id_bytes.len() != 32 {
         return Err((
@@ -448,7 +469,7 @@ pub async fn capability_revoke_handler(
             Json(ErrorResponse {
                 error: "Capability ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
@@ -459,23 +480,30 @@ pub async fn capability_revoke_handler(
         "single" => RevocationScope::Single,
         "subtree" => RevocationScope::Subtree,
         "all" => RevocationScope::All,
-        _ => return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid scope: must be 'single', 'subtree', or 'all', got '{}'", req.scope),
-                coherence_score: None,
-            })
-        )),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid scope: must be 'single', 'subtree', or 'all', got '{}'",
+                        req.scope
+                    ),
+                    coherence_score: None,
+                }),
+            ))
+        }
     };
 
     mgr.revoke_capability(&cap_id, &req.revoker_did, scope)
-        .map_err(|e| (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: format!("Failed to revoke capability: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!("Failed to revoke capability: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -491,14 +519,15 @@ pub async fn capability_get_handler(
 ) -> Result<Json<GetCapabilityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let cap_id_bytes = hex::decode(&cap_id_hex)
-        .map_err(|_| (
+    let cap_id_bytes = hex::decode(&cap_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid capability ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if cap_id_bytes.len() != 32 {
         return Err((
@@ -506,30 +535,32 @@ pub async fn capability_get_handler(
             Json(ErrorResponse {
                 error: "Capability ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut cap_id = [0u8; 32];
     cap_id.copy_from_slice(&cap_id_bytes);
 
-    let cap = mgr.get_capability(&cap_id)
-        .ok_or_else(|| (
+    let cap = mgr.get_capability(&cap_id).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Capability not found: {}", cap_id_hex),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let cap_json = serde_json::to_value(cap)
-        .map_err(|e| (
+    let cap_json = serde_json::to_value(cap).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize capability: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(GetCapabilityResponse {
         capability: cap_json,
@@ -549,16 +580,19 @@ pub async fn capability_list_by_did_handler(
 
     let caps = mgr.list_capabilities_for_did(&did);
 
-    let caps_json: Vec<serde_json::Value> = caps.iter()
+    let caps_json: Vec<serde_json::Value> = caps
+        .iter()
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to serialize capabilities: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialize capabilities: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     Ok(Json(ListCapabilitiesResponse {
         capabilities: caps_json,
@@ -581,32 +615,41 @@ pub async fn introduction_create_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let sk_bytes = hex::decode(&req.introducer_sk_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.introducer_sk_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    mgr.introduce(&req.introducer_did, &sk, &req.introduced_did, &req.edge_name)
-        .map_err(|e| (
+    mgr.introduce(
+        &req.introducer_did,
+        &sk,
+        &req.introduced_did,
+        &req.edge_name,
+    )
+    .map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to create introduction: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -622,7 +665,8 @@ pub async fn introduction_chain_handler(
 ) -> Json<IntroductionChainResponse> {
     let mgr = state.lock().await;
 
-    let chain = mgr.get_introduction_chain(&from_did, &to_did)
+    let chain = mgr
+        .get_introduction_chain(&from_did, &to_did)
         .unwrap_or_else(|| vec![from_did.clone(), to_did.clone()]);
 
     Json(IntroductionChainResponse { chain })
@@ -641,23 +685,25 @@ pub async fn coherence_profile_handler(
 ) -> Result<Json<CoherenceProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let profile = mgr.get_coherence_profile(&did)
-        .ok_or_else(|| (
+    let profile = mgr.get_coherence_profile(&did).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("DID not found: {}", did),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let profile_json = serde_json::to_value(&profile)
-        .map_err(|e| (
+    let profile_json = serde_json::to_value(&profile).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize profile: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(CoherenceProfileResponse {
         profile: profile_json,
@@ -675,18 +721,17 @@ pub async fn coherence_curvature_handler(
 ) -> Result<Json<CurvatureResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let curvature = mgr.get_identity_curvature(&did_a, &did_b)
-        .ok_or_else(|| (
+    let curvature = mgr.get_identity_curvature(&did_a, &did_b).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: "One or both DIDs not found".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    Ok(Json(CurvatureResponse {
-        curvature,
-    }))
+    Ok(Json(CurvatureResponse { curvature }))
 }
 
 #[derive(Serialize)]
@@ -719,14 +764,15 @@ pub async fn petname_set_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    mgr.set_petname(&req.name, &req.did)
-        .map_err(|e| (
+    mgr.set_petname(&req.name, &req.did).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to set petname: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -742,18 +788,17 @@ pub async fn petname_resolve_handler(
 ) -> Result<Json<ResolvePetnameResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let did = mgr.resolve_petname(&name)
-        .ok_or_else(|| (
+    let did = mgr.resolve_petname(&name).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Petname not found: {}", name),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    Ok(Json(ResolvePetnameResponse {
-        did,
-    }))
+    Ok(Json(ResolvePetnameResponse { did }))
 }
 
 // Governance endpoints
@@ -781,78 +826,93 @@ pub async fn governance_propose_handler(
 ) -> Result<Json<CreateProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let sk_bytes = hex::decode(&req.proposer_sk_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.proposer_sk_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     // Parse proposal type
     let proposal_type = match req.proposal_type.to_lowercase().as_str() {
         "protocol_parameter" => {
-            let param = req.parameter.ok_or_else(|| (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Missing parameter field for protocol_parameter proposal".to_string(),
-                    coherence_score: None,
-                })
-            ))?;
-            let value = req.new_value.ok_or_else(|| (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Missing new_value field for protocol_parameter proposal".to_string(),
-                    coherence_score: None,
-                })
-            ))?;
+            let param = req.parameter.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "Missing parameter field for protocol_parameter proposal"
+                            .to_string(),
+                        coherence_score: None,
+                    }),
+                )
+            })?;
+            let value = req.new_value.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "Missing new_value field for protocol_parameter proposal"
+                            .to_string(),
+                        coherence_score: None,
+                    }),
+                )
+            })?;
             ProposalType::ProtocolParameter {
                 parameter: param,
                 new_value: value.into_bytes(),
             }
         }
-        _ => return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Unsupported proposal type: {}", req.proposal_type),
-                coherence_score: None,
-            })
-        )),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Unsupported proposal type: {}", req.proposal_type),
+                    coherence_score: None,
+                }),
+            ))
+        }
     };
 
-    let proposal = mgr.create_proposal(
-        &req.proposer_did,
-        &sk,
-        proposal_type,
-        &req.description,
-        req.duration_blocks,
-    ).map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: format!("Failed to create proposal: {}", e),
-            coherence_score: None,
-        })
-    ))?;
+    let proposal = mgr
+        .create_proposal(
+            &req.proposer_did,
+            &sk,
+            proposal_type,
+            &req.description,
+            req.duration_blocks,
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create proposal: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     let proposal_id_hex = hex::encode(proposal.id);
-    let proposal_json = serde_json::to_value(&proposal)
-        .map_err(|e| (
+    let proposal_json = serde_json::to_value(&proposal).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize proposal: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(CreateProposalResponse {
         proposal_id_hex,
@@ -879,14 +939,15 @@ pub async fn governance_vote_handler(
 ) -> Result<Json<CastVoteResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let proposal_id_bytes = hex::decode(&req.proposal_id_hex)
-        .map_err(|_| (
+    let proposal_id_bytes = hex::decode(&req.proposal_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid proposal ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if proposal_id_bytes.len() != 32 {
         return Err((
@@ -894,59 +955,67 @@ pub async fn governance_vote_handler(
             Json(ErrorResponse {
                 error: "Proposal ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut proposal_id = [0u8; 32];
     proposal_id.copy_from_slice(&proposal_id_bytes);
 
-    let sk_bytes = hex::decode(&req.voter_sk_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.voter_sk_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     let vote_choice = match req.vote.to_lowercase().as_str() {
         "for" => VoteChoice::For,
         "against" => VoteChoice::Against,
         "abstain" => VoteChoice::Abstain,
-        _ => return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid vote: must be 'for', 'against', or 'abstain', got '{}'", req.vote),
-                coherence_score: None,
-            })
-        )),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid vote: must be 'for', 'against', or 'abstain', got '{}'",
+                        req.vote
+                    ),
+                    coherence_score: None,
+                }),
+            ))
+        }
     };
 
-    let vote = mgr.cast_vote(&proposal_id, &req.voter_did, &sk, vote_choice)
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to cast vote: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+    let vote = mgr
+        .cast_vote(&proposal_id, &req.voter_did, &sk, vote_choice)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to cast vote: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     let vote_id = vote.compute_id();
     let vote_id_hex = hex::encode(vote_id);
 
-    Ok(Json(CastVoteResponse {
-        vote_id_hex,
-    }))
+    Ok(Json(CastVoteResponse { vote_id_hex }))
 }
 
 #[derive(Serialize)]
@@ -960,16 +1029,19 @@ pub async fn governance_list_proposals_handler(
     let mgr = state.lock().await;
 
     let proposals = mgr.list_proposals();
-    let proposals_json: Vec<serde_json::Value> = proposals.iter()
+    let proposals_json: Vec<serde_json::Value> = proposals
+        .iter()
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to serialize proposals: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialize proposals: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     Ok(Json(ListProposalsResponse {
         proposals: proposals_json,
@@ -988,14 +1060,15 @@ pub async fn governance_get_proposal_handler(
 ) -> Result<Json<GetProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let proposal_id_bytes = hex::decode(&proposal_id_hex)
-        .map_err(|_| (
+    let proposal_id_bytes = hex::decode(&proposal_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid proposal ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if proposal_id_bytes.len() != 32 {
         return Err((
@@ -1003,23 +1076,25 @@ pub async fn governance_get_proposal_handler(
             Json(ErrorResponse {
                 error: "Proposal ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut proposal_id = [0u8; 32];
     proposal_id.copy_from_slice(&proposal_id_bytes);
 
-    let proposal = mgr.get_proposal(&proposal_id)
-        .ok_or_else(|| (
+    let proposal = mgr.get_proposal(&proposal_id).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Proposal not found: {}", proposal_id_hex),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let result = mgr.evaluate_proposal(&proposal_id)
+    let result = mgr
+        .evaluate_proposal(&proposal_id)
         .unwrap_or(disentangle_identity::ProposalResult::Pending);
 
     let result_str = match result {
@@ -1028,14 +1103,15 @@ pub async fn governance_get_proposal_handler(
         disentangle_identity::ProposalResult::Pending => "pending",
     };
 
-    let proposal_json = serde_json::to_value(proposal)
-        .map_err(|e| (
+    let proposal_json = serde_json::to_value(proposal).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize proposal: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(GetProposalResponse {
         proposal: proposal_json,
@@ -1066,41 +1142,44 @@ pub async fn agreement_propose_handler(
 ) -> Result<Json<ProposeAgreementResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let sk_bytes = hex::decode(&req.signing_key_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     // Parse capability ID if provided
     let capability_id = if let Some(cap_id_hex) = req.capability_id_hex {
-        let cap_id_bytes = hex::decode(&cap_id_hex)
-            .map_err(|_| (
+        let cap_id_bytes = hex::decode(&cap_id_hex).map_err(|_| {
+            (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Invalid capability ID hex encoding".to_string(),
                     coherence_score: None,
-                })
-            ))?;
+                }),
+            )
+        })?;
         if cap_id_bytes.len() != 32 {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Capability ID must be 32 bytes".to_string(),
                     coherence_score: None,
-                })
+                }),
             ));
         }
         let mut cap_id = [0u8; 32];
@@ -1111,38 +1190,45 @@ pub async fn agreement_propose_handler(
     };
 
     // Parse terms
-    let terms: disentangle_identity::AgreementTerms = serde_json::from_value(req.terms)
-        .map_err(|e| (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid agreement terms: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+    let terms: disentangle_identity::AgreementTerms =
+        serde_json::from_value(req.terms).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid agreement terms: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
-    let agreement_id = mgr.propose_agreement(
-        &req.provider_did,
-        &sk,
-        &req.consumer_did,
-        capability_id.as_ref(),
-        terms,
-    ).map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: format!("Failed to propose agreement: {}", e),
-            coherence_score: None,
-        })
-    ))?;
+    let agreement_id = mgr
+        .propose_agreement(
+            &req.provider_did,
+            &sk,
+            &req.consumer_did,
+            capability_id.as_ref(),
+            terms,
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to propose agreement: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     let agreement = mgr.get_agreement(&agreement_id).unwrap();
-    let agreement_json = serde_json::to_value(agreement)
-        .map_err(|e| (
+    let agreement_json = serde_json::to_value(agreement).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize agreement: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(ProposeAgreementResponse {
         agreement_id_hex: hex::encode(agreement_id),
@@ -1162,14 +1248,15 @@ pub async fn agreement_accept_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let agreement_id_bytes = hex::decode(&req.agreement_id_hex)
-        .map_err(|_| (
+    let agreement_id_bytes = hex::decode(&req.agreement_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid agreement ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if agreement_id_bytes.len() != 32 {
         return Err((
@@ -1177,39 +1264,42 @@ pub async fn agreement_accept_handler(
             Json(ErrorResponse {
                 error: "Agreement ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut agreement_id = [0u8; 32];
     agreement_id.copy_from_slice(&agreement_id_bytes);
 
-    let sk_bytes = hex::decode(&req.consumer_sk_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.consumer_sk_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    mgr.accept_agreement(&agreement_id, &sk)
-        .map_err(|e| (
+    mgr.accept_agreement(&agreement_id, &sk).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to accept agreement: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -1228,14 +1318,15 @@ pub async fn agreement_complete_handler(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let agreement_id_bytes = hex::decode(&req.agreement_id_hex)
-        .map_err(|_| (
+    let agreement_id_bytes = hex::decode(&req.agreement_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid agreement ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if agreement_id_bytes.len() != 32 {
         return Err((
@@ -1243,21 +1334,22 @@ pub async fn agreement_complete_handler(
             Json(ErrorResponse {
                 error: "Agreement ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut agreement_id = [0u8; 32];
     agreement_id.copy_from_slice(&agreement_id_bytes);
 
-    let outcome_hash_bytes = hex::decode(&req.outcome_hash_hex)
-        .map_err(|_| (
+    let outcome_hash_bytes = hex::decode(&req.outcome_hash_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid outcome hash hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if outcome_hash_bytes.len() != 32 {
         return Err((
@@ -1265,39 +1357,43 @@ pub async fn agreement_complete_handler(
             Json(ErrorResponse {
                 error: "Outcome hash must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut outcome_hash = [0u8; 32];
     outcome_hash.copy_from_slice(&outcome_hash_bytes);
 
-    let sk_bytes = hex::decode(&req.signing_key_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     mgr.complete_agreement(&agreement_id, req.success, outcome_hash, &sk)
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to complete agreement: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to complete agreement: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse { success: true }))
 }
@@ -1313,14 +1409,15 @@ pub async fn agreement_get_handler(
 ) -> Result<Json<GetAgreementResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mgr = state.lock().await;
 
-    let agreement_id_bytes = hex::decode(&agreement_id_hex)
-        .map_err(|_| (
+    let agreement_id_bytes = hex::decode(&agreement_id_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid agreement ID hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     if agreement_id_bytes.len() != 32 {
         return Err((
@@ -1328,30 +1425,32 @@ pub async fn agreement_get_handler(
             Json(ErrorResponse {
                 error: "Agreement ID must be 32 bytes".to_string(),
                 coherence_score: None,
-            })
+            }),
         ));
     }
 
     let mut agreement_id = [0u8; 32];
     agreement_id.copy_from_slice(&agreement_id_bytes);
 
-    let agreement = mgr.get_agreement(&agreement_id)
-        .ok_or_else(|| (
+    let agreement = mgr.get_agreement(&agreement_id).ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Agreement not found: {}", agreement_id_hex),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let agreement_json = serde_json::to_value(agreement)
-        .map_err(|e| (
+    let agreement_json = serde_json::to_value(agreement).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize agreement: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(GetAgreementResponse {
         agreement: agreement_json,
@@ -1371,16 +1470,19 @@ pub async fn agreement_list_by_did_handler(
 
     let agreements = mgr.list_agreements_for_did(&did);
 
-    let agreements_json: Vec<serde_json::Value> = agreements.iter()
+    let agreements_json: Vec<serde_json::Value> = agreements
+        .iter()
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to serialize agreements: {}", e),
-                coherence_score: None,
-            })
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialize agreements: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     Ok(Json(ListAgreementsResponse {
         agreements: agreements_json,
@@ -1416,58 +1518,61 @@ pub async fn capability_create_from_template_handler(
 ) -> Result<Json<CreateCapabilityResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut mgr = state.lock().await;
 
-    let sk_bytes = hex::decode(&req.signing_key_hex)
-        .map_err(|_| (
+    let sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid signing key hex encoding".to_string(),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
-    let sk = SigningKey::from_bytes(&sk_bytes)
-        .map_err(|e| (
+    let sk = SigningKey::from_bytes(&sk_bytes).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid signing key: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     let template: disentangle_identity::CapabilityTemplate = serde_json::from_value(req.template)
-        .map_err(|e| (
+        .map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Invalid template: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     let (subject, constraints) = template.to_capability_params();
 
-    let cap = mgr.create_capability(
-        &req.issuer_did,
-        &sk,
-        subject,
-        constraints,
-        req.delegatable,
-    ).map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: format!("Failed to create capability: {}", e),
-            coherence_score: None,
-        })
-    ))?;
+    let cap = mgr
+        .create_capability(&req.issuer_did, &sk, subject, constraints, req.delegatable)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create capability: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
 
     let cap_id_hex = hex::encode(cap.id);
-    let cap_json = serde_json::to_value(&cap)
-        .map_err(|e| (
+    let cap_json = serde_json::to_value(&cap).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to serialize capability: {}", e),
                 coherence_score: None,
-            })
-        ))?;
+            }),
+        )
+    })?;
 
     Ok(Json(CreateCapabilityResponse {
         capability_id_hex: cap_id_hex,
@@ -1497,7 +1602,8 @@ pub async fn watch_handler(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
 
-    let topics: HashSet<String> = params.topics
+    let topics: HashSet<String> = params
+        .topics
         .unwrap_or_default()
         .split(',')
         .filter(|s| !s.is_empty())
@@ -1519,25 +1625,30 @@ pub async fn watch_handler(
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(15))
-            .text("keepalive")
+            .text("keepalive"),
     )
 }
 
 /// Filter events based on topics and DID
-fn should_emit_event(event: &NodeEvent, topics: &HashSet<String>, filter_did: &Option<String>) -> bool {
+fn should_emit_event(
+    event: &NodeEvent,
+    topics: &HashSet<String>,
+    filter_did: &Option<String>,
+) -> bool {
     // If no topics specified, emit all events
     let topic_match = if topics.is_empty() {
         true
     } else {
         let event_topic = match event {
             NodeEvent::IdentityRegistered { .. } => "identity",
-            NodeEvent::CapabilityCreated { .. } |
-            NodeEvent::CapabilityDelegated { .. } |
-            NodeEvent::CapabilityExercised { .. } |
-            NodeEvent::CapabilityRevoked { .. } => "delegation",
+            NodeEvent::CapabilityCreated { .. }
+            | NodeEvent::CapabilityDelegated { .. }
+            | NodeEvent::CapabilityExercised { .. }
+            | NodeEvent::CapabilityRevoked { .. } => "delegation",
             NodeEvent::IntroductionCreated { .. } => "introduction",
-            NodeEvent::AgreementCreated { .. } |
-            NodeEvent::AgreementCompleted { .. } => "agreement",
+            NodeEvent::AgreementCreated { .. } | NodeEvent::AgreementCompleted { .. } => {
+                "agreement"
+            }
             NodeEvent::CoherenceChanged { .. } => "coherence",
             NodeEvent::TransactionMined { .. } => "transaction",
         };
@@ -1553,9 +1664,15 @@ fn should_emit_event(event: &NodeEvent, topics: &HashSet<String>, filter_did: &O
         match event {
             NodeEvent::IdentityRegistered { did: event_did, .. } => event_did == did,
             NodeEvent::CapabilityCreated { issuer_did, .. } => issuer_did == did,
-            NodeEvent::CapabilityDelegated { from_did, to_did, .. } => from_did == did || to_did == did,
+            NodeEvent::CapabilityDelegated {
+                from_did, to_did, ..
+            } => from_did == did || to_did == did,
             NodeEvent::CapabilityExercised { invoker_did, .. } => invoker_did == did,
-            NodeEvent::IntroductionCreated { introducer, introduced, .. } => introducer == did || introduced == did,
+            NodeEvent::IntroductionCreated {
+                introducer,
+                introduced,
+                ..
+            } => introducer == did || introduced == did,
             NodeEvent::AgreementCreated { parties, .. } => parties.contains(did),
             NodeEvent::AgreementCompleted { .. } => true, // Can't filter without loading agreement
             NodeEvent::CoherenceChanged { did: event_did, .. } => event_did == did,
@@ -1594,13 +1711,20 @@ pub async fn network_health_handler(
     let registered_dids = dids.len();
 
     // Count active agreements
-    let active_agreements = dids.iter()
+    let active_agreements = dids
+        .iter()
         .flat_map(|did| mgr.list_agreements_for_did(did))
-        .filter(|agreement| matches!(agreement.status, disentangle_identity::AgreementStatus::Active))
+        .filter(|agreement| {
+            matches!(
+                agreement.status,
+                disentangle_identity::AgreementStatus::Active
+            )
+        })
         .count();
 
     // Count capabilities
-    let active_capabilities = dids.iter()
+    let active_capabilities = dids
+        .iter()
         .flat_map(|did| mgr.list_capabilities_for_did(did))
         .count();
 
@@ -1609,7 +1733,7 @@ pub async fn network_health_handler(
     let mut curvature_count = 0;
 
     for i in 0..dids.len() {
-        for j in (i+1)..dids.len() {
+        for j in (i + 1)..dids.len() {
             if let Some(curvature) = mgr.get_identity_curvature(&dids[i], &dids[j]) {
                 curvature_sum += curvature;
                 curvature_count += 1;
@@ -1624,14 +1748,16 @@ pub async fn network_health_handler(
     };
 
     // Count identity graph edges (introductions)
-    let identity_graph_edges: usize = dids.iter()
+    let identity_graph_edges: usize = dids
+        .iter()
         .map(|did| mgr.get_neighbors(did).len())
-        .sum::<usize>() / 2; // Divide by 2 because edges are bidirectional
+        .sum::<usize>()
+        / 2; // Divide by 2 because edges are bidirectional
 
     Json(NetworkHealthResponse {
         node_id: "local".to_string(), // Placeholder - would need PeerId from node state
-        peer_count: 0, // Placeholder - would need peer count from P2P layer
-        dag_size: 0, // Placeholder - would need DAG size from consensus layer
+        peer_count: 0,                // Placeholder - would need peer count from P2P layer
+        dag_size: 0,                  // Placeholder - would need DAG size from consensus layer
         current_depth: mgr.current_depth(),
         tips: vec![], // Placeholder
         registered_dids,
