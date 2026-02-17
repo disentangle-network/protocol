@@ -1,0 +1,59 @@
+name: Docker Publish
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+            ghcr.io/disentangle-network/disentangle-node:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign image
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          cosign sign --yes ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Attach SBOM to image
+        run: |
+          cosign attach sbom --sbom sbom.spdx.json ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
