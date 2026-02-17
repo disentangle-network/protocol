@@ -1,7 +1,7 @@
 //! Core types for zero-knowledge reputation proofs.
 
 use disentangle_crypto::hash::Hash256;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Leaf data for account state in Merkle tree.
 /// This is what gets hashed to create leaf nodes.

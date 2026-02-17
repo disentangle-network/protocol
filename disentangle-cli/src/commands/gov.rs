@@ -1,7 +1,7 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::keys;
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum GovCommands {

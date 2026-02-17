@@ -148,9 +148,7 @@ struct Generator {
 
 impl Generator {
     fn new(node_url: String, num_senders: usize) -> Self {
-        let senders: Vec<String> = (0..num_senders)
-            .map(|i| format!("sender-{}", i))
-            .collect();
+        let senders: Vec<String> = (0..num_senders).map(|i| format!("sender-{}", i)).collect();
         let sender_sequences = vec![0; num_senders];
 
         Self {
@@ -182,9 +180,7 @@ impl Generator {
                     Err(e) => Err(format!("Failed to parse graph response: {}", e)),
                 }
             }
-            Err(e) => {
-                Err(format!("Failed to fetch graph: {}", e))
-            }
+            Err(e) => Err(format!("Failed to fetch graph: {}", e)),
         }
     }
 
@@ -279,9 +275,13 @@ impl Generator {
 
                     println!("\n=== Status Report ===");
                     println!("  Uptime: {}s", elapsed);
-                    println!("  Transactions sent: {} ({:.2} tx/s)", self.total_sent, rate);
+                    println!(
+                        "  Transactions sent: {} ({:.2} tx/s)",
+                        self.total_sent, rate
+                    );
                     println!("  Errors: {}", self.total_errors);
-                    println!("  DAG size: {} (Δ: +{})",
+                    println!(
+                        "  DAG size: {} (Δ: +{})",
                         status.dag_size,
                         status.dag_size.saturating_sub(self.last_dag_size)
                     );
@@ -308,7 +308,14 @@ impl Generator {
         println!("  Node: {}", self.node_url);
         println!("  Rate: {} tx/s", rate);
         println!("  Senders: {}", self.senders.len());
-        println!("  Target count: {}", if max_count == 0 { "unlimited".to_string() } else { max_count.to_string() });
+        println!(
+            "  Target count: {}",
+            if max_count == 0 {
+                "unlimited".to_string()
+            } else {
+                max_count.to_string()
+            }
+        );
         println!("\nPress Ctrl+C to stop.\n");
 
         let interval = Duration::from_secs_f64(1.0 / rate);
@@ -320,7 +327,8 @@ impl Generator {
         ctrlc::set_handler(move || {
             println!("\n\nShutting down gracefully...");
             r.store(false, Ordering::SeqCst);
-        }).expect("Error setting Ctrl+C handler");
+        })
+        .expect("Error setting Ctrl+C handler");
 
         // Wait for node to be ready
         println!("Waiting for node to be ready...");
@@ -349,7 +357,10 @@ impl Generator {
             }
 
             if max_count > 0 && self.total_sent >= max_count {
-                println!("\nTarget count reached: {} transactions sent", self.total_sent);
+                println!(
+                    "\nTarget count reached: {} transactions sent",
+                    self.total_sent
+                );
                 break;
             }
 
@@ -357,11 +368,9 @@ impl Generator {
             if Instant::now() >= next_tx {
                 match self.send_transaction() {
                     Ok(tx_id) => {
-                        println!("[{}] ✓ Sent tx {} (total: {}, errors: {})",
-                            self.total_sent,
-                            tx_id,
-                            self.total_sent,
-                            self.total_errors
+                        println!(
+                            "[{}] ✓ Sent tx {} (total: {}, errors: {})",
+                            self.total_sent, tx_id, self.total_sent, self.total_errors
                         );
                     }
                     Err(e) => {

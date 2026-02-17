@@ -146,7 +146,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
         }
     }
-    println!("  ✓ Created {} edges (dense mesh)", honest_agents.len() * (honest_agents.len() - 1));
+    println!(
+        "  ✓ Created {} edges (dense mesh)",
+        honest_agents.len() * (honest_agents.len() - 1)
+    );
     println!();
 
     // Phase 2: Register Sybil identities (tree topology)
@@ -156,7 +159,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut sybil_leaves = Vec::new();
     for i in 0..args.sybil_count {
-        let agent = register_identity(&client, &args.node_url, "agi", &format!("sybil-leaf-{}", i))?;
+        let agent =
+            register_identity(&client, &args.node_url, "agi", &format!("sybil-leaf-{}", i))?;
         println!("  ✓ {} ({}...)", agent.name, &agent.did[..20]);
         sybil_leaves.push(agent);
     }
@@ -199,7 +203,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tx_data = format!("{}-tx-{}", identity.name, tx_num);
             submit_transaction(&client, &args.node_url, &identity.did, parents, &tx_data)?;
         }
-        println!("  ✓ {} submitted {} transactions", identity.name, args.tx_per_identity);
+        println!(
+            "  ✓ {} submitted {} transactions",
+            identity.name, args.tx_per_identity
+        );
     }
     println!();
 
@@ -209,7 +216,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Query honest agents
     println!("=== HONEST AGENTS ===");
-    println!("{:<20} {:>10} {:>12} {:>10} {:>10}", "DID (short)", "Mass", "Curvature", "Diversity", "Score");
+    println!(
+        "{:<20} {:>10} {:>12} {:>10} {:>10}",
+        "DID (short)", "Mass", "Curvature", "Diversity", "Score"
+    );
     println!("{:-<64}", "");
 
     let mut honest_scores = Vec::new();
@@ -229,7 +239,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Query Sybil agents
     println!("=== SYBIL AGENTS ===");
-    println!("{:<20} {:>10} {:>12} {:>10} {:>10}", "DID (short)", "Mass", "Curvature", "Diversity", "Score");
+    println!(
+        "{:<20} {:>10} {:>12} {:>10} {:>10}",
+        "DID (short)", "Mass", "Curvature", "Diversity", "Score"
+    );
     println!("{:-<64}", "");
 
     let mut sybil_scores = Vec::new();

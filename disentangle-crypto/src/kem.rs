@@ -11,10 +11,13 @@
 //! - Stealth addresses (encrypting outputs to receivers)
 //! - Hybrid key exchange in P2P transport (future)
 
-use pqcrypto_kyber::kyber1024;
-use pqcrypto_traits::kem::{PublicKey as PqPublicKey, SecretKey as PqSecretKey, Ciphertext as PqCiphertext, SharedSecret as PqSharedSecret};
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
 use crate::{CryptoError, Result};
+use pqcrypto_kyber::kyber1024;
+use pqcrypto_traits::kem::{
+    Ciphertext as PqCiphertext, PublicKey as PqPublicKey, SecretKey as PqSecretKey,
+    SharedSecret as PqSharedSecret,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const ENCAPSULATION_KEY_BYTES: usize = 1568;
 pub const DECAPSULATION_KEY_BYTES: usize = 3168;
@@ -57,8 +60,8 @@ impl EncapsulationKey {
                 got: bytes.len(),
             });
         }
-        let pk = kyber1024::PublicKey::from_bytes(bytes)
-            .map_err(|_| CryptoError::InvalidKeyLength {
+        let pk =
+            kyber1024::PublicKey::from_bytes(bytes).map_err(|_| CryptoError::InvalidKeyLength {
                 expected: ENCAPSULATION_KEY_BYTES,
                 got: bytes.len(),
             })?;
@@ -78,8 +81,8 @@ impl DecapsulationKey {
                 got: bytes.len(),
             });
         }
-        let sk = kyber1024::SecretKey::from_bytes(bytes)
-            .map_err(|_| CryptoError::InvalidKeyLength {
+        let sk =
+            kyber1024::SecretKey::from_bytes(bytes).map_err(|_| CryptoError::InvalidKeyLength {
                 expected: DECAPSULATION_KEY_BYTES,
                 got: bytes.len(),
             })?;
@@ -99,11 +102,12 @@ impl Ciphertext {
                 got: bytes.len(),
             });
         }
-        let ct = kyber1024::Ciphertext::from_bytes(bytes)
-            .map_err(|_| CryptoError::InvalidKeyLength {
+        let ct = kyber1024::Ciphertext::from_bytes(bytes).map_err(|_| {
+            CryptoError::InvalidKeyLength {
                 expected: CIPHERTEXT_BYTES,
                 got: bytes.len(),
-            })?;
+            }
+        })?;
         Ok(Self(ct))
     }
 
@@ -130,7 +134,10 @@ pub fn encapsulate(encapsulation_key: &EncapsulationKey) -> (Ciphertext, SharedS
     (Ciphertext(ct), SharedSecret(secret))
 }
 
-pub fn decapsulate(decapsulation_key: &DecapsulationKey, ciphertext: &Ciphertext) -> Result<SharedSecret> {
+pub fn decapsulate(
+    decapsulation_key: &DecapsulationKey,
+    ciphertext: &Ciphertext,
+) -> Result<SharedSecret> {
     let ss = kyber1024::decapsulate(&ciphertext.0, &decapsulation_key.0);
     let mut secret = [0u8; SHARED_SECRET_BYTES];
     secret.copy_from_slice(ss.as_bytes());
@@ -187,7 +194,9 @@ impl std::fmt::Debug for EncapsulationKey {
 
 impl std::fmt::Debug for DecapsulationKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecapsulationKey").field("bytes", &"[REDACTED]").finish()
+        f.debug_struct("DecapsulationKey")
+            .field("bytes", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -203,7 +212,9 @@ impl std::fmt::Debug for Ciphertext {
 
 impl std::fmt::Debug for SharedSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SharedSecret").field("bytes", &"[REDACTED]").finish()
+        f.debug_struct("SharedSecret")
+            .field("bytes", &"[REDACTED]")
+            .finish()
     }
 }
 

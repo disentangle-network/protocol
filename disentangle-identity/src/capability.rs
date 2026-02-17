@@ -5,11 +5,11 @@
 use crate::did::DID;
 use crate::IdentityError;
 use disentangle_crypto::{
-    hash::{Hash256, sha3_256_multi},
-    signature::{SigningKey, Signature, sign, verify, VerifyingKey},
+    hash::{sha3_256_multi, Hash256},
+    signature::{sign, verify, Signature, SigningKey, VerifyingKey},
 };
 use disentangle_dag::{FixedPoint, SCALE};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub type CapabilityId = Hash256;
 
@@ -27,7 +27,12 @@ pub struct Capability {
 
 impl Capability {
     /// Create a new capability signed by the issuer
-    pub fn new(issuer: &DID, _issuer_pk: &VerifyingKey, subject: CapabilitySubject, sk: &SigningKey) -> Self {
+    pub fn new(
+        issuer: &DID,
+        _issuer_pk: &VerifyingKey,
+        subject: CapabilitySubject,
+        sk: &SigningKey,
+    ) -> Self {
         let mut cap = Self {
             id: [0u8; 32],
             issuer: issuer.clone(),
@@ -57,7 +62,8 @@ impl Capability {
             self.delegatable,
             self.max_delegation_depth,
             &self.expiry,
-        )).unwrap_or_default();
+        ))
+        .unwrap_or_default();
 
         sha3_256_multi(&[b"CAPABILITY_ID_V1", &content])
     }
@@ -87,17 +93,32 @@ impl Capability {
             self.delegatable,
             self.max_delegation_depth,
             &self.expiry,
-        )).unwrap_or_default()
+        ))
+        .unwrap_or_default()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CapabilitySubject {
-    Transact { scope: TransactionScope },
-    Name { namespace: DID, operations: Vec<NameOp> },
-    Access { resource_id: Hash256, operations: Vec<AccessOp> },
-    Govern { scope: GovernanceScope, weight: FixedPoint },
-    Custom { type_uri: String, parameters: Vec<u8> },
+    Transact {
+        scope: TransactionScope,
+    },
+    Name {
+        namespace: DID,
+        operations: Vec<NameOp>,
+    },
+    Access {
+        resource_id: Hash256,
+        operations: Vec<AccessOp>,
+    },
+    Govern {
+        scope: GovernanceScope,
+        weight: FixedPoint,
+    },
+    Custom {
+        type_uri: String,
+        parameters: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,10 +130,18 @@ pub enum TransactionScope {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum NameOp { Read, Write, Delegate }
+pub enum NameOp {
+    Read,
+    Write,
+    Delegate,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum AccessOp { Read, Write, Execute }
+pub enum AccessOp {
+    Read,
+    Write,
+    Execute,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GovernanceScope {
@@ -134,19 +163,16 @@ pub enum Constraint {
 impl Constraint {
     pub fn is_satisfied(&self, context: &ConstraintContext) -> bool {
         match self {
-            Self::TemporalBound { not_before, not_after } => {
-                context.current_depth >= *not_before && context.current_depth <= *not_after
-            }
-            Self::ReputationMinimum { bucket } => {
-                context.reputation_bucket >= *bucket
-            }
+            Self::TemporalBound {
+                not_before,
+                not_after,
+            } => context.current_depth >= *not_before && context.current_depth <= *not_after,
+            Self::ReputationMinimum { bucket } => context.reputation_bucket >= *bucket,
             Self::CoherenceMinimum { min_mass } => {
                 // Compare without overflow: mass/SCALE >= min_mass
                 (context.topological_mass / SCALE) as u64 >= *min_mass
             }
-            Self::DelegationDepth { max_depth } => {
-                context.current_delegation_depth <= *max_depth
-            }
+            Self::DelegationDepth { max_depth } => context.current_delegation_depth <= *max_depth,
             Self::RequiresCapability { prerequisite } => {
                 context.held_capabilities.contains(prerequisite)
             }
@@ -184,7 +210,9 @@ impl DelegationRecord {
         depth: u64,
     ) -> Result<Self, IdentityError> {
         if !cap.delegatable {
-            return Err(IdentityError::ConstraintNotSatisfied("Capability is not delegatable".to_string()));
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Capability is not delegatable".to_string(),
+            ));
         }
 
         let mut record = Self {
@@ -255,7 +283,8 @@ impl DelegationRecord {
             &self.additional_constraints,
             self.chain_depth,
             self.depth,
-        )).unwrap_or_default()
+        ))
+        .unwrap_or_default()
     }
 }
 
@@ -275,7 +304,9 @@ mod tests {
     fn test_capability_creation() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let cap = Capability::new(&did, &pk, subject, &sk);
 
@@ -288,7 +319,9 @@ mod tests {
     fn test_capability_id_computation() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let cap = Capability::new(&did, &pk, subject, &sk);
         let id1 = cap.compute_id();
@@ -302,7 +335,9 @@ mod tests {
     fn test_capability_verification() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let cap = Capability::new(&did, &pk, subject, &sk);
         assert!(cap.verify(&pk));
@@ -342,7 +377,9 @@ mod tests {
     fn test_delegation_creation() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let cap = Capability::new(&did, &pk, subject, &sk);
 
@@ -431,7 +468,9 @@ mod tests {
     #[test]
     fn test_requires_capability_passes() {
         let prerequisite_id = [42u8; 32];
-        let constraint = Constraint::RequiresCapability { prerequisite: prerequisite_id };
+        let constraint = Constraint::RequiresCapability {
+            prerequisite: prerequisite_id,
+        };
         let context = ConstraintContext {
             current_depth: 0,
             reputation_bucket: 0,
@@ -445,7 +484,9 @@ mod tests {
     #[test]
     fn test_requires_capability_fails() {
         let prerequisite_id = [42u8; 32];
-        let constraint = Constraint::RequiresCapability { prerequisite: prerequisite_id };
+        let constraint = Constraint::RequiresCapability {
+            prerequisite: prerequisite_id,
+        };
         let context = ConstraintContext {
             current_depth: 0,
             reputation_bucket: 0,
@@ -462,13 +503,18 @@ mod tests {
     fn test_capability_multiple_constraints_all_pass() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let mut cap = Capability::new(&did, &pk, subject, &sk);
         cap.constraints = vec![
             Constraint::ReputationMinimum { bucket: 2 },
             Constraint::CoherenceMinimum { min_mass: 100 },
-            Constraint::TemporalBound { not_before: 10, not_after: 1000 },
+            Constraint::TemporalBound {
+                not_before: 10,
+                not_after: 1000,
+            },
         ];
 
         let context = ConstraintContext {
@@ -486,13 +532,18 @@ mod tests {
     fn test_capability_multiple_constraints_one_fails() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let mut cap = Capability::new(&did, &pk, subject, &sk);
         cap.constraints = vec![
-            Constraint::ReputationMinimum { bucket: 2 },  // passes (5 >= 2)
+            Constraint::ReputationMinimum { bucket: 2 }, // passes (5 >= 2)
             Constraint::CoherenceMinimum { min_mass: 100 }, // fails (50 < 100)
-            Constraint::TemporalBound { not_before: 10, not_after: 1000 }, // passes
+            Constraint::TemporalBound {
+                not_before: 10,
+                not_after: 1000,
+            }, // passes
         ];
 
         let context = ConstraintContext {
@@ -512,7 +563,9 @@ mod tests {
     fn test_delegation_non_delegatable_returns_error() {
         let (sk, pk) = generate_keypair();
         let did = DID::new(&pk, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let mut cap = Capability::new(&did, &pk, subject, &sk);
         cap.delegatable = false; // mark as non-delegatable
@@ -537,7 +590,9 @@ mod tests {
     fn test_delegation_chain_verification() {
         let (sk1, pk1) = generate_keypair();
         let did1 = DID::new(&pk1, false);
-        let subject = CapabilitySubject::Transact { scope: TransactionScope::All };
+        let subject = CapabilitySubject::Transact {
+            scope: TransactionScope::All,
+        };
 
         let cap = Capability::new(&did1, &pk1, subject, &sk1);
 

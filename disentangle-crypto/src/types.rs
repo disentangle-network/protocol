@@ -4,7 +4,7 @@
 
 use crate::hash::Hash256;
 use crate::signature::VerifyingKey;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub type NodeId = Hash256;
 pub type PublicKey = VerifyingKey;
@@ -36,7 +36,7 @@ impl AccountId {
     pub fn from_public_key(pk: &VerifyingKey) -> Self {
         Self(crate::hash::sha3_256(&pk.to_bytes()))
     }
-    
+
     pub fn as_bytes(&self) -> &Hash256 {
         &self.0
     }
@@ -54,11 +54,11 @@ pub struct ReputationScore(pub u64);
 impl ReputationScore {
     pub const ZERO: Self = Self(0);
     pub const MIN_VOUCH_REQUIRED: Self = Self(50);
-    
+
     pub fn from_tx_count(count: u64) -> Self {
         Self(count)
     }
-    
+
     pub fn as_u64(&self) -> u64 {
         self.0
     }
@@ -69,9 +69,13 @@ pub struct Nullifier(pub Hash256);
 
 impl Nullifier {
     pub fn compute(secret_key_hash: &Hash256, epoch: Epoch, tx_nonce: &[u8]) -> Self {
-        Self(crate::hash::compute_nullifier(secret_key_hash, epoch.0, tx_nonce))
+        Self(crate::hash::compute_nullifier(
+            secret_key_hash,
+            epoch.0,
+            tx_nonce,
+        ))
     }
-    
+
     pub fn as_bytes(&self) -> &Hash256 {
         &self.0
     }
@@ -80,8 +84,8 @@ impl Nullifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signature::generate_keypair;
     use crate::hash::HASH_BYTES;
+    use crate::signature::generate_keypair;
 
     #[test]
     fn test_epoch_from_depth() {

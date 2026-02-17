@@ -2,12 +2,12 @@
 //!
 //! Tracks introductions, delegations, and computes identity curvature.
 
-use crate::did::DID;
 use crate::capability::{CapabilityId, DelegationRecord, RevocationScope};
+use crate::did::DID;
 use crate::petname::IntroductionStep;
-use crate::transactions::{IntroductionTransaction, IntroductionContext};
+use crate::transactions::{IntroductionContext, IntroductionTransaction};
 use disentangle_crypto::hash::Hash256;
-use disentangle_dag::{FixedPoint, SCALE, fp_from_ratio};
+use disentangle_dag::{fp_from_ratio, FixedPoint, SCALE};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Default)]
@@ -45,27 +45,32 @@ impl IdentityGraph {
         self.introductions.entry(key).or_default().push(record);
 
         // Update neighbors
-        self.did_neighbors.entry(tx.introducer_did.clone())
+        self.did_neighbors
+            .entry(tx.introducer_did.clone())
             .or_default()
             .insert(tx.introduced_did.clone());
 
-        self.did_neighbors.entry(tx.introduced_did.clone())
+        self.did_neighbors
+            .entry(tx.introduced_did.clone())
             .or_default()
             .insert(tx.introducer_did.clone());
     }
 
     /// Record a capability delegation
     pub fn record_delegation(&mut self, record: &DelegationRecord) {
-        self.delegations.entry(record.capability_id)
+        self.delegations
+            .entry(record.capability_id)
             .or_default()
             .push(record.clone());
 
         // Update neighbors based on delegation
-        self.did_neighbors.entry(record.delegator.clone())
+        self.did_neighbors
+            .entry(record.delegator.clone())
             .or_default()
             .insert(record.delegatee.clone());
 
-        self.did_neighbors.entry(record.delegatee.clone())
+        self.did_neighbors
+            .entry(record.delegatee.clone())
             .or_default()
             .insert(record.delegator.clone());
     }
@@ -166,7 +171,8 @@ impl IdentityGraph {
 
     /// Get the delegation chain for a capability
     pub fn delegation_chain(&self, cap: &CapabilityId) -> Vec<&DelegationRecord> {
-        self.delegations.get(cap)
+        self.delegations
+            .get(cap)
             .map(|records| records.iter().collect())
             .unwrap_or_default()
     }

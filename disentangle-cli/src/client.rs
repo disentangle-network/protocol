@@ -89,7 +89,8 @@ mod tests {
                 let msg = e.to_string();
                 assert!(
                     msg.contains("error") || msg.contains("connect") || msg.contains("Connection"),
-                    "Expected connection error, got: {}", msg
+                    "Expected connection error, got: {}",
+                    msg
                 );
             }
             other => panic!("Expected CliError::RequestFailed, got: {:?}", other),

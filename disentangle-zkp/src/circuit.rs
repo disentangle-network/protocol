@@ -20,10 +20,10 @@
 //! 3. account_state.reputation_score >= reputation_threshold
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, AbstractField};
+use p3_baby_bear::BabyBear;
+use p3_field::{AbstractField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_baby_bear::BabyBear;
 
 /// Width of the execution trace (number of columns).
 /// We need columns for:
@@ -44,7 +44,9 @@ pub struct ReputationAir {
 
 impl Default for ReputationAir {
     fn default() -> Self {
-        Self { num_rows: MAX_TREE_DEPTH }
+        Self {
+            num_rows: MAX_TREE_DEPTH,
+        }
     }
 }
 
@@ -88,7 +90,7 @@ impl<AB: AirBuilder> Air<AB> for ReputationAir {
         // Full implementation would use range proofs
         let is_last = local[9];
         builder.when(is_last).assert_zero(
-            reputation - threshold - local[10] // diff stored in workspace
+            reputation - threshold - local[10], // diff stored in workspace
         );
 
         // Constraint 3: Hash chain continuity

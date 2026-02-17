@@ -6,10 +6,12 @@
 //! - Signature: 4,627 bytes
 //! - Security: NIST Level 5 (equivalent to AES-256)
 
-use pqcrypto_dilithium::dilithium5;
-use pqcrypto_traits::sign::{PublicKey as PqPublicKey, SecretKey as PqSecretKey, DetachedSignature};
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
 use crate::{CryptoError, Result};
+use pqcrypto_dilithium::dilithium5;
+use pqcrypto_traits::sign::{
+    DetachedSignature, PublicKey as PqPublicKey, SecretKey as PqSecretKey,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const PUBLIC_KEY_BYTES: usize = 2592;
 pub const SECRET_KEY_BYTES: usize = 4896;
@@ -54,11 +56,12 @@ impl SigningKey {
                 got: bytes.len(),
             });
         }
-        let sk = dilithium5::SecretKey::from_bytes(bytes)
-            .map_err(|_| CryptoError::InvalidKeyLength {
+        let sk = dilithium5::SecretKey::from_bytes(bytes).map_err(|_| {
+            CryptoError::InvalidKeyLength {
                 expected: SECRET_KEY_BYTES,
                 got: bytes.len(),
-            })?;
+            }
+        })?;
         Ok(Self(sk))
     }
 
@@ -75,11 +78,12 @@ impl VerifyingKey {
                 got: bytes.len(),
             });
         }
-        let pk = dilithium5::PublicKey::from_bytes(bytes)
-            .map_err(|_| CryptoError::InvalidKeyLength {
+        let pk = dilithium5::PublicKey::from_bytes(bytes).map_err(|_| {
+            CryptoError::InvalidKeyLength {
                 expected: PUBLIC_KEY_BYTES,
                 got: bytes.len(),
-            })?;
+            }
+        })?;
         Ok(Self(pk))
     }
 
@@ -161,7 +165,9 @@ impl<'de> Deserialize<'de> for Signature {
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SigningKey").field("bytes", &"[REDACTED]").finish()
+        f.debug_struct("SigningKey")
+            .field("bytes", &"[REDACTED]")
+            .finish()
     }
 }
 

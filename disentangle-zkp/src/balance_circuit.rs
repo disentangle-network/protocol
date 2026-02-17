@@ -3,12 +3,12 @@
 //! Proves: Sum(input_amounts) == Sum(output_amounts)
 //! Without revealing the actual amounts.
 
+use crate::confidential::{AmountCommitment, Blinding};
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, AbstractField};
 use p3_baby_bear::BabyBear;
+use p3_field::{AbstractField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use crate::confidential::{AmountCommitment, Blinding};
 
 /// Maximum number of inputs/outputs supported per transaction.
 pub const MAX_IO_COUNT: usize = 8;
@@ -26,7 +26,10 @@ pub struct BalanceAir {
 
 impl Default for BalanceAir {
     fn default() -> Self {
-        Self { num_inputs: 2, num_outputs: 2 }
+        Self {
+            num_inputs: 2,
+            num_outputs: 2,
+        }
     }
 }
 
@@ -82,10 +85,7 @@ pub struct BalanceWitness {
 impl BalanceWitness {
     /// Create a new balance witness.
     /// Returns None if balance doesn't conserve.
-    pub fn new(
-        inputs: Vec<(u64, Blinding)>,
-        outputs: Vec<(u64, Blinding)>,
-    ) -> Option<Self> {
+    pub fn new(inputs: Vec<(u64, Blinding)>, outputs: Vec<(u64, Blinding)>) -> Option<Self> {
         let input_sum: u64 = inputs.iter().map(|(a, _)| a).sum();
         let output_sum: u64 = outputs.iter().map(|(a, _)| a).sum();
 
@@ -158,14 +158,8 @@ mod tests {
 
     #[test]
     fn test_balance_witness_valid() {
-        let inputs = vec![
-            (1000u64, [1u8; 32]),
-            (500u64, [2u8; 32]),
-        ];
-        let outputs = vec![
-            (800u64, [3u8; 32]),
-            (700u64, [4u8; 32]),
-        ];
+        let inputs = vec![(1000u64, [1u8; 32]), (500u64, [2u8; 32])];
+        let outputs = vec![(800u64, [3u8; 32]), (700u64, [4u8; 32])];
 
         let witness = BalanceWitness::new(inputs, outputs);
         assert!(witness.is_some());
@@ -179,9 +173,7 @@ mod tests {
 
     #[test]
     fn test_balance_witness_invalid() {
-        let inputs = vec![
-            (1000u64, [1u8; 32]),
-        ];
+        let inputs = vec![(1000u64, [1u8; 32])];
         let outputs = vec![
             (999u64, [2u8; 32]), // Doesn't balance!
         ];
@@ -192,13 +184,8 @@ mod tests {
 
     #[test]
     fn test_trace_generation() {
-        let inputs = vec![
-            (500u64, [5u8; 32]),
-            (300u64, [6u8; 32]),
-        ];
-        let outputs = vec![
-            (800u64, [7u8; 32]),
-        ];
+        let inputs = vec![(500u64, [5u8; 32]), (300u64, [6u8; 32])];
+        let outputs = vec![(800u64, [7u8; 32])];
 
         let witness = BalanceWitness::new(inputs, outputs).unwrap();
         let trace = witness.generate_trace();

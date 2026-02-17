@@ -117,13 +117,21 @@ mod tests {
     #[test]
     fn parse_identity_create_with_options() {
         let cli = try_parse(&[
-            "disentangle", "identity", "create",
-            "--agent-type", "agi",
-            "--display-name", "TestBot",
-        ]).unwrap();
+            "disentangle",
+            "identity",
+            "create",
+            "--agent-type",
+            "agi",
+            "--display-name",
+            "TestBot",
+        ])
+        .unwrap();
         if let Commands::Identity { command } = cli.command {
             match command {
-                commands::identity::IdentityCommands::Create { agent_type, display_name } => {
+                commands::identity::IdentityCommands::Create {
+                    agent_type,
+                    display_name,
+                } => {
                     assert_eq!(agent_type, "agi");
                     assert_eq!(display_name, Some("TestBot".to_string()));
                 }
@@ -158,14 +166,24 @@ mod tests {
     #[test]
     fn parse_tx_submit() {
         let cli = try_parse(&[
-            "disentangle", "tx", "submit",
-            "--sender", "alice",
-            "--parents", "aabb,ccdd",
-            "--data", "hello world",
-        ]).unwrap();
+            "disentangle",
+            "tx",
+            "submit",
+            "--sender",
+            "alice",
+            "--parents",
+            "aabb,ccdd",
+            "--data",
+            "hello world",
+        ])
+        .unwrap();
         if let Commands::Tx { command } = cli.command {
             match command {
-                commands::tx::TxCommands::Submit { sender, parents, data } => {
+                commands::tx::TxCommands::Submit {
+                    sender,
+                    parents,
+                    data,
+                } => {
                     assert_eq!(sender, "alice");
                     assert_eq!(parents, vec!["aabb", "ccdd"]);
                     assert_eq!(data, "hello world");
@@ -213,7 +231,14 @@ mod tests {
 
     #[test]
     fn parse_petname_set() {
-        let cli = try_parse(&["disentangle", "petname", "set", "alice", "did:disentangle:abc"]).unwrap();
+        let cli = try_parse(&[
+            "disentangle",
+            "petname",
+            "set",
+            "alice",
+            "did:disentangle:abc",
+        ])
+        .unwrap();
         if let Commands::Petname { command } = cli.command {
             match command {
                 commands::petname::PetnameCommands::Set { name, did } => {
@@ -253,27 +278,25 @@ mod tests {
     #[test]
     fn parse_custom_node_url() {
         let cli = try_parse(&[
-            "disentangle", "--node", "http://mynode:8080",
-            "node", "status",
-        ]).unwrap();
+            "disentangle",
+            "--node",
+            "http://mynode:8080",
+            "node",
+            "status",
+        ])
+        .unwrap();
         assert_eq!(cli.node, "http://mynode:8080");
     }
 
     #[test]
     fn parse_json_format() {
-        let cli = try_parse(&[
-            "disentangle", "--format", "json",
-            "node", "status",
-        ]).unwrap();
+        let cli = try_parse(&["disentangle", "--format", "json", "node", "status"]).unwrap();
         assert!(matches!(cli.format, OutputFormat::Json));
     }
 
     #[test]
     fn parse_human_format_explicit() {
-        let cli = try_parse(&[
-            "disentangle", "--format", "human",
-            "node", "status",
-        ]).unwrap();
+        let cli = try_parse(&["disentangle", "--format", "human", "node", "status"]).unwrap();
         assert!(matches!(cli.format, OutputFormat::Human));
     }
 

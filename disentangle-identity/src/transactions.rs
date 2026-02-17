@@ -2,17 +2,17 @@
 //!
 //! Transaction types for identity, capability, introduction, and governance operations.
 
-use crate::did::{DID, DIDDocument, AgentType, VerificationMethod, ServiceEndpoint};
 use crate::capability::{Capability, CapabilityId, DelegationRecord, RevocationScope};
-use crate::governance::{GovernanceVote};
+use crate::did::{AgentType, DIDDocument, ServiceEndpoint, VerificationMethod, DID};
+use crate::governance::GovernanceVote;
 use disentangle_crypto::{
-    hash::{Hash256, sha3_256_multi},
-    signature::{Signature, VerifyingKey, verify},
+    hash::{sha3_256_multi, Hash256},
+    signature::{verify, Signature, VerifyingKey},
     types::Nullifier,
 };
 use disentangle_dag::Transaction;
 use disentangle_simhash::SimHash;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 // Domain separation tags
 const _TX_TAG_LEGACY: &[u8] = b"TX_LEGACY_V2";
@@ -84,9 +84,7 @@ impl DIDRegistration {
     }
 
     pub fn verify_pow(&self, difficulty: u32) -> bool {
-        let leading_zeros = self.pow_hash.iter()
-            .take_while(|&&b| b == 0)
-            .count() * 8;
+        let leading_zeros = self.pow_hash.iter().take_while(|&&b| b == 0).count() * 8;
 
         leading_zeros >= difficulty as usize
     }
@@ -197,8 +195,8 @@ impl KeyRotation {
 
     pub fn verify_signatures(&self, old_pk: &VerifyingKey, new_pk: &VerifyingKey) -> bool {
         let message = self.signing_payload();
-        verify(old_pk, &message, &self.proof_old).is_ok() &&
-        verify(new_pk, &message, &self.proof_new).is_ok()
+        verify(old_pk, &message, &self.proof_old).is_ok()
+            && verify(new_pk, &message, &self.proof_new).is_ok()
     }
 
     fn signing_payload(&self) -> Vec<u8> {
@@ -291,7 +289,7 @@ impl CapabilityTransaction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionIdentity {
     pub ephemeral_pk: VerifyingKey,
-    pub did_binding_proof: Vec<u8>,   // Serialized STARK proof (Phase 2)
+    pub did_binding_proof: Vec<u8>, // Serialized STARK proof (Phase 2)
     pub nullifier: Nullifier,
     pub reputation_bucket: u8,
 }
@@ -300,7 +298,7 @@ pub struct TransactionIdentity {
 pub enum CapabilityOperation {
     Invoke {
         capability_id: CapabilityId,
-        invocation_proof: Vec<u8>,    // Serialized STARK proof (Phase 2)
+        invocation_proof: Vec<u8>, // Serialized STARK proof (Phase 2)
         action: Vec<u8>,
     },
     Delegate(DelegationRecord),
@@ -323,19 +321,15 @@ pub struct GovernanceTransaction {
 impl GovernanceTransaction {
     pub fn compute_id(&self) -> Hash256 {
         let vote_bytes = bincode::serialize(&self.vote).unwrap_or_default();
-        sha3_256_multi(&[
-            TX_TAG_GOVERNANCE,
-            &vote_bytes,
-            &self.depth.to_le_bytes(),
-        ])
+        sha3_256_multi(&[TX_TAG_GOVERNANCE, &vote_bytes, &self.depth.to_le_bytes()])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use disentangle_crypto::signature::{generate_keypair, sign};
     use crate::did::AgentType;
+    use disentangle_crypto::signature::{generate_keypair, sign};
 
     #[test]
     fn test_did_registration_id() {

@@ -3,14 +3,14 @@
 //! Replicates the Python `conflict_v2.py` scenario in Rust to verify
 //! that the integer-arithmetic implementation correctly throttles Sybils.
 
-use disentangle_dag::{TransactionDAG, Transaction, NodeId, SCALE, Hash256};
 use disentangle_consensus::{resolve_conflict, ConflictWinner};
-use disentangle_simhash::SimHash;
 use disentangle_crypto::{
-    signature::{generate_keypair, sign, SigningKey, VerifyingKey},
     hash::sha3_256,
-    types::{Nullifier, Epoch},
+    signature::{generate_keypair, sign, SigningKey, VerifyingKey},
+    types::{Epoch, Nullifier},
 };
+use disentangle_dag::{Hash256, NodeId, Transaction, TransactionDAG, SCALE};
+use disentangle_simhash::SimHash;
 
 /// Generate a test keypair with deterministic seed
 fn make_keypair(seed: &str) -> (SigningKey, VerifyingKey) {
@@ -96,7 +96,11 @@ fn test_sybil_attack_resistance() {
     // [2] Build main chain with established users
     // Using high block numbers to ensure bootstrap throttling is fully active
     const BLOCK_OFFSET: u64 = 6000; // After BOOTSTRAP_END
-    println!("[2] Building Main Chain (blocks {}-{})...", BLOCK_OFFSET + 1, BLOCK_OFFSET + 30);
+    println!(
+        "[2] Building Main Chain (blocks {}-{})...",
+        BLOCK_OFFSET + 1,
+        BLOCK_OFFSET + 30
+    );
     let mut tips = vec![genesis_id];
     let mut tx_counter = 0u64;
 
@@ -122,7 +126,10 @@ fn test_sybil_attack_resistance() {
     println!("    Main chain transactions: {}", tx_counter);
 
     // [3] Create double-spend fork
-    println!("\n[3] Creating Double-Spend Fork at block {}...", BLOCK_OFFSET + 31);
+    println!(
+        "\n[3] Creating Double-Spend Fork at block {}...",
+        BLOCK_OFFSET + 31
+    );
     let fork_point = tips[0];
 
     let branch_a_tx = make_test_tx(
@@ -145,9 +152,18 @@ fn test_sybil_attack_resistance() {
     let branch_b_root = branch_b_tx.id;
     dag.insert_genesis(branch_b_tx);
 
-    println!("    Fork point: {:02x}{:02x}{:02x}{:02x}...", fork_point[0], fork_point[1], fork_point[2], fork_point[3]);
-    println!("    Branch A (Sybil-backed): {:02x}{:02x}{:02x}{:02x}...", branch_a_root[0], branch_a_root[1], branch_a_root[2], branch_a_root[3]);
-    println!("    Branch B (Honest): {:02x}{:02x}{:02x}{:02x}...", branch_b_root[0], branch_b_root[1], branch_b_root[2], branch_b_root[3]);
+    println!(
+        "    Fork point: {:02x}{:02x}{:02x}{:02x}...",
+        fork_point[0], fork_point[1], fork_point[2], fork_point[3]
+    );
+    println!(
+        "    Branch A (Sybil-backed): {:02x}{:02x}{:02x}{:02x}...",
+        branch_a_root[0], branch_a_root[1], branch_a_root[2], branch_a_root[3]
+    );
+    println!(
+        "    Branch B (Honest): {:02x}{:02x}{:02x}{:02x}...",
+        branch_b_root[0], branch_b_root[1], branch_b_root[2], branch_b_root[3]
+    );
 
     // [4] THE ATTACK: Sybil cluster attached via single bridge
     println!("\n[4] THE ATTACK: Attaching 5 Sybils to Branch A via single bridge...");
@@ -178,7 +194,10 @@ fn test_sybil_attack_resistance() {
         }
     }
     println!("    Sybil transactions added: 5 (1 bridge + 4 sybil)");
-    println!("    Bridge node: {:02x}{:02x}{:02x}{:02x}...", bridge_id[0], bridge_id[1], bridge_id[2], bridge_id[3]);
+    println!(
+        "    Bridge node: {:02x}{:02x}{:02x}{:02x}...",
+        bridge_id[0], bridge_id[1], bridge_id[2], bridge_id[3]
+    );
 
     // [5] THE DEFENSE: Honest transactions on Branch B with good connectivity
     println!("\n[5] THE DEFENSE: Attaching 15 Honest transactions to Branch B...");
@@ -201,7 +220,13 @@ fn test_sybil_attack_resistance() {
         // Established users have high reputation
         let reputation = 100 + ((32 + i as u64) * 10);
 
-        let tx = make_test_tx(&name, &established_keypairs[user_idx], parents, BLOCK_OFFSET + 32 + i as u64, reputation);
+        let tx = make_test_tx(
+            &name,
+            &established_keypairs[user_idx],
+            parents,
+            BLOCK_OFFSET + 32 + i as u64,
+            reputation,
+        );
         let tx_id = tx.id;
         dag.insert_genesis(tx);
 
@@ -215,7 +240,10 @@ fn test_sybil_attack_resistance() {
     let bridge_curv = dag.discrete_curvature(&branch_a_root, &bridge_id);
     let bridge_curv_float = bridge_curv as f64 / SCALE as f64;
     println!("    Bridge edge curvature (raw): {}", bridge_curv);
-    println!("    Bridge edge curvature (scaled): {:.4}", bridge_curv_float);
+    println!(
+        "    Bridge edge curvature (scaled): {:.4}",
+        bridge_curv_float
+    );
 
     let bridge_weight = dag.curvature_weight(bridge_curv);
     let bridge_weight_float = bridge_weight as f64 / SCALE as f64;
@@ -224,7 +252,8 @@ fn test_sybil_attack_resistance() {
     // [7] Resolve conflict
     println!("\n[7] Resolving Conflict...");
     let fork_block = BLOCK_OFFSET + 31;
-    let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &branch_a_root, &branch_b_root, fork_block);
+    let (winner, mass_a, mass_b) =
+        resolve_conflict(&mut dag, &branch_a_root, &branch_b_root, fork_block);
 
     let mass_a_float = mass_a.total_mass as f64 / SCALE as f64;
     let mass_b_float = mass_b.total_mass as f64 / SCALE as f64;
@@ -237,15 +266,27 @@ fn test_sybil_attack_resistance() {
     println!("      Transactions: 6 (branch root + 1 bridge + 4 sybils)");
     println!("      Supporters: {}", mass_a.supporters);
     println!("      Claimed Reputation: {}", mass_a.claimed_reputation);
-    println!("      Diversity Score: {:.2}", mass_a.diversity_score as f64 / SCALE as f64);
-    println!("      Total Mass: {} (scaled: {:.2})", mass_a.total_mass, mass_a_float);
+    println!(
+        "      Diversity Score: {:.2}",
+        mass_a.diversity_score as f64 / SCALE as f64
+    );
+    println!(
+        "      Total Mass: {} (scaled: {:.2})",
+        mass_a.total_mass, mass_a_float
+    );
 
     println!("\n    BRANCH B (Honest):");
     println!("      Transactions: 16 (root + 15 honest)");
     println!("      Supporters: {}", mass_b.supporters);
     println!("      Claimed Reputation: {}", mass_b.claimed_reputation);
-    println!("      Diversity Score: {:.2}", mass_b.diversity_score as f64 / SCALE as f64);
-    println!("      Total Mass: {} (scaled: {:.2})", mass_b.total_mass, mass_b_float);
+    println!(
+        "      Diversity Score: {:.2}",
+        mass_b.diversity_score as f64 / SCALE as f64
+    );
+    println!(
+        "      Total Mass: {} (scaled: {:.2})",
+        mass_b.total_mass, mass_b_float
+    );
 
     let winner_str = match winner {
         ConflictWinner::BranchA => "BRANCH A (Sybil) - ATTACK SUCCEEDED!",
@@ -255,7 +296,10 @@ fn test_sybil_attack_resistance() {
 
     if mass_b.total_mass > 0 {
         let ratio = mass_a.total_mass as f64 / mass_b.total_mass as f64;
-        println!("    Sybil effectiveness: {:.1}% of honest mass", ratio * 100.0);
+        println!(
+            "    Sybil effectiveness: {:.1}% of honest mass",
+            ratio * 100.0
+        );
     }
 
     println!("\n======================================================================\n");
@@ -263,7 +307,10 @@ fn test_sybil_attack_resistance() {
     // The test passes if honest branch wins
     // With v0.2, sybils have 0 reputation and pass through a bottleneck bridge
     assert_eq!(winner, ConflictWinner::BranchB, "Honest branch should win!");
-    assert!(mass_b.total_mass > mass_a.total_mass, "Honest mass should exceed Sybil mass");
+    assert!(
+        mass_b.total_mass > mass_a.total_mass,
+        "Honest mass should exceed Sybil mass"
+    );
 
     println!("TEST PASSED: Sybil attack successfully defeated!\n");
 }
@@ -328,12 +375,24 @@ fn test_bootstrap_ramping_conflict_resolution() {
     let alpha_mid = effective_alpha(mid_block);
     let alpha_post = effective_alpha(post_block);
 
-    println!("    Mid-ramp block {}: alpha = {} (max = {})", mid_block, alpha_mid, ALPHA_MAX);
-    println!("    Post-ramp block {}: alpha = {} (max = {})", post_block, alpha_post, ALPHA_MAX);
+    println!(
+        "    Mid-ramp block {}: alpha = {} (max = {})",
+        mid_block, alpha_mid, ALPHA_MAX
+    );
+    println!(
+        "    Post-ramp block {}: alpha = {} (max = {})",
+        post_block, alpha_post, ALPHA_MAX
+    );
 
     assert!(alpha_mid > 0, "Mid-ramp alpha should be > 0");
-    assert!(alpha_mid < ALPHA_MAX, "Mid-ramp alpha should be < ALPHA_MAX");
-    assert_eq!(alpha_post, ALPHA_MAX, "Post-ramp alpha should equal ALPHA_MAX");
+    assert!(
+        alpha_mid < ALPHA_MAX,
+        "Mid-ramp alpha should be < ALPHA_MAX"
+    );
+    assert_eq!(
+        alpha_post, ALPHA_MAX,
+        "Post-ramp alpha should equal ALPHA_MAX"
+    );
 
     // Helper: build a conflict scenario at the given block offset and return
     // (branch_a_mass, branch_b_mass) where branch_a goes through a bottleneck bridge.
@@ -441,15 +500,22 @@ fn test_bootstrap_ramping_conflict_resolution() {
         }
 
         let fork_block = base_block;
-        let (_, mass_a, mass_b) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, fork_block);
+        let (_, mass_a, mass_b) =
+            resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, fork_block);
         (mass_a.total_mass, mass_b.total_mass)
     }
 
     let (mass_a_mid, mass_b_mid) = build_conflict_at_block(mid_block);
     let (mass_a_post, mass_b_post) = build_conflict_at_block(post_block);
 
-    println!("\n    Mid-ramp (block {}): branch A = {}, branch B = {}", mid_block, mass_a_mid, mass_b_mid);
-    println!("    Post-ramp (block {}): branch A = {}, branch B = {}", post_block, mass_a_post, mass_b_post);
+    println!(
+        "\n    Mid-ramp (block {}): branch A = {}, branch B = {}",
+        mid_block, mass_a_mid, mass_b_mid
+    );
+    println!(
+        "    Post-ramp (block {}): branch A = {}, branch B = {}",
+        post_block, mass_a_post, mass_b_post
+    );
 
     // Key invariant: the sybil branch (A) should be more heavily throttled
     // in the post-ramp scenario than in the mid-ramp scenario.
@@ -470,27 +536,41 @@ fn test_bootstrap_ramping_conflict_resolution() {
     println!("    Post-ramp A/B ratio: {:.4}", ratio_post);
 
     // Key invariant 1: the effective_alpha is correctly graduated
-    assert!(alpha_mid < alpha_post,
+    assert!(
+        alpha_mid < alpha_post,
         "Mid-ramp alpha ({}) should be strictly less than post-ramp alpha ({})",
-        alpha_mid, alpha_post);
+        alpha_mid,
+        alpha_post
+    );
 
     // Key invariant 2: different alpha values should produce different mass values.
     // The mid-ramp and post-ramp scenarios have identical DAG structure but different
     // throttling levels, so the computed masses should differ.
-    assert!(mass_a_mid != mass_a_post || mass_b_mid != mass_b_post,
+    assert!(
+        mass_a_mid != mass_a_post || mass_b_mid != mass_b_post,
         "Different alpha values should produce different mass computations. \
          Mid: A={}, B={}. Post: A={}, B={}.",
-        mass_a_mid, mass_b_mid, mass_a_post, mass_b_post);
+        mass_a_mid,
+        mass_b_mid,
+        mass_a_post,
+        mass_b_post
+    );
 
     // Key invariant 3: in both scenarios, the well-connected honest branch (B)
     // should dominate the sybil branch (A). Throttling hurts sybils but the
     // curvature-based weighting ensures honest branches always win.
-    assert!(mass_b_mid > mass_a_mid,
+    assert!(
+        mass_b_mid > mass_a_mid,
         "Mid-ramp: honest branch B ({}) should beat sybil branch A ({})",
-        mass_b_mid, mass_a_mid);
-    assert!(mass_b_post > mass_a_post,
+        mass_b_mid,
+        mass_a_mid
+    );
+    assert!(
+        mass_b_post > mass_a_post,
         "Post-ramp: honest branch B ({}) should beat sybil branch A ({})",
-        mass_b_post, mass_a_post);
+        mass_b_post,
+        mass_a_post
+    );
 
     println!("\nTEST PASSED: Bootstrap ramping modulates conflict resolution correctly\n");
 }
@@ -536,10 +616,16 @@ fn test_is_finalized() {
     // Initially, neither branch should be finalized against the other because
     // they have similar mass (both have a single transaction root).
     let finalized_early = is_finalized(&mut dag, &branch_a_id, &[branch_b_id], fork_block + 1);
-    println!("    After fork (equal branches): is_finalized = {}", finalized_early);
+    println!(
+        "    After fork (equal branches): is_finalized = {}",
+        finalized_early
+    );
     // Both branches are trivially similar in mass -- neither is 10x the other
     // so finalization should be false for A vs B.
-    assert!(!finalized_early, "Branch should NOT be finalized when competitor has comparable mass");
+    assert!(
+        !finalized_early,
+        "Branch should NOT be finalized when competitor has comparable mass"
+    );
 
     // Now build up Branch A significantly with many high-reputation honest txs
     let mut tips_a = vec![branch_a_id];
@@ -564,13 +650,25 @@ fn test_is_finalized() {
     // Branch A now has 20+ high-reputation supporters with good connectivity.
     // Branch B still has only 1 transaction with low reputation.
     let finalized_after = is_finalized(&mut dag, &branch_a_id, &[branch_b_id], fork_block + 1);
-    println!("    After building Branch A (20 txs, high rep): is_finalized = {}", finalized_after);
-    assert!(finalized_after, "Branch A should be finalized with 10x+ mass advantage over Branch B");
+    println!(
+        "    After building Branch A (20 txs, high rep): is_finalized = {}",
+        finalized_after
+    );
+    assert!(
+        finalized_after,
+        "Branch A should be finalized with 10x+ mass advantage over Branch B"
+    );
 
     // Verify the reverse: Branch B should NOT be finalized against Branch A
     let finalized_b = is_finalized(&mut dag, &branch_b_id, &[branch_a_id], fork_block + 1);
-    println!("    Branch B against Branch A: is_finalized = {}", finalized_b);
-    assert!(!finalized_b, "Branch B should NOT be finalized against the dominant Branch A");
+    println!(
+        "    Branch B against Branch A: is_finalized = {}",
+        finalized_b
+    );
+    assert!(
+        !finalized_b,
+        "Branch B should NOT be finalized against the dominant Branch A"
+    );
 
     println!("\nTEST PASSED: is_finalized correctly tracks finality threshold\n");
 }

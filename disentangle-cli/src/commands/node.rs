@@ -1,6 +1,6 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum NodeCommands {
@@ -28,11 +28,9 @@ pub fn handle(cmd: NodeCommands, client: &NodeClient, format: &OutputFormat) -> 
             format.print(&resp);
             Ok(())
         }
-        NodeCommands::Peers => {
-            Err(CliError::NotImplemented(
-                "Peer listing is not yet supported by the node RPC".to_string()
-            ))
-        }
+        NodeCommands::Peers => Err(CliError::NotImplemented(
+            "Peer listing is not yet supported by the node RPC".to_string(),
+        )),
         NodeCommands::DagStats => {
             // Extract stats from the /graph endpoint
             let graph = client.get("/graph")?;

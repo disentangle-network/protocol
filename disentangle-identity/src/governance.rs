@@ -2,15 +2,15 @@
 //!
 //! Coherence-weighted governance with proposals, voting, and quorum evaluation.
 
-use crate::did::DID;
 use crate::coherence::CoherenceProfile;
+use crate::did::DID;
 use crate::transactions::TransactionIdentity;
 use disentangle_crypto::{
-    hash::{Hash256, sha3_256_multi},
-    signature::{SigningKey, Signature, sign, verify, VerifyingKey},
+    hash::{sha3_256_multi, Hash256},
+    signature::{sign, verify, Signature, SigningKey, VerifyingKey},
 };
 use disentangle_dag::{FixedPoint, SCALE};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,10 +91,19 @@ impl GovernanceProposal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProposalType {
-    ProtocolParameter { parameter: String, new_value: Vec<u8> },
-    CapabilityPolicy { policy: Vec<u8> },
-    NamingHubRecognition { hub_did: DID },
-    EmergencyAction { action: Vec<u8> },
+    ProtocolParameter {
+        parameter: String,
+        new_value: Vec<u8>,
+    },
+    CapabilityPolicy {
+        policy: Vec<u8>,
+    },
+    NamingHubRecognition {
+        hub_did: DID,
+    },
+    EmergencyAction {
+        action: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,8 +138,13 @@ pub enum VoteChoice {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GovernanceQuorum {
-    CoherenceWeighted { threshold: FixedPoint },
-    DiversityMinimum { min_supporters: u64, min_mass: FixedPoint },
+    CoherenceWeighted {
+        threshold: FixedPoint,
+    },
+    DiversityMinimum {
+        min_supporters: u64,
+        min_mass: FixedPoint,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +170,8 @@ pub fn evaluate_proposal(
     }
 
     // Filter votes for this proposal within voting period
-    let relevant_votes: Vec<&GovernanceVote> = votes.iter()
+    let relevant_votes: Vec<&GovernanceVote> = votes
+        .iter()
         .filter(|v| v.proposal_id == proposal.id)
         .filter(|v| v.depth >= proposal.voting_start && v.depth <= proposal.voting_end)
         .collect();
@@ -203,7 +218,10 @@ pub fn evaluate_proposal(
                 ProposalResult::Failed
             }
         }
-        GovernanceQuorum::DiversityMinimum { min_supporters, min_mass } => {
+        GovernanceQuorum::DiversityMinimum {
+            min_supporters,
+            min_mass,
+        } => {
             if unique_supporters >= *min_supporters && for_weight >= *min_mass as i64 {
                 ProposalResult::Passed
             } else {
@@ -216,8 +234,8 @@ pub fn evaluate_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use disentangle_crypto::signature::generate_keypair;
     use crate::transactions::TransactionIdentity;
+    use disentangle_crypto::signature::generate_keypair;
     use disentangle_crypto::types::Nullifier;
 
     #[test]
@@ -236,7 +254,9 @@ mod tests {
             [1u8; 32],
             1000,
             2000,
-            GovernanceQuorum::CoherenceWeighted { threshold: SCALE / 2 },
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
             &sk,
         );
 
@@ -261,7 +281,9 @@ mod tests {
             [1u8; 32],
             1000,
             2000,
-            GovernanceQuorum::CoherenceWeighted { threshold: SCALE / 2 },
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
             &sk,
         );
 
@@ -282,7 +304,9 @@ mod tests {
             [1u8; 32],
             1000,
             2000,
-            GovernanceQuorum::CoherenceWeighted { threshold: SCALE / 2 },
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
             &sk,
         );
 
@@ -308,7 +332,9 @@ mod tests {
             [1u8; 32],
             1000,
             2000,
-            GovernanceQuorum::CoherenceWeighted { threshold: SCALE / 2 }, // 50% threshold
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            }, // 50% threshold
             &sk,
         );
 

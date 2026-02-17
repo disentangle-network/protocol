@@ -1,7 +1,7 @@
-use clap::Subcommand;
-use crate::client::{NodeClient, CliResult, CliError};
+use crate::client::{CliError, CliResult, NodeClient};
 use crate::keys;
 use crate::output::OutputFormat;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum PetnameCommands {
@@ -60,11 +60,9 @@ pub fn handle(cmd: PetnameCommands, client: &NodeClient, format: &OutputFormat) 
             format.print(&resp);
             Ok(())
         }
-        PetnameCommands::List => {
-            Err(CliError::NotImplemented(
-                "Petname listing is not yet supported by the node RPC".to_string()
-            ))
-        }
+        PetnameCommands::List => Err(CliError::NotImplemented(
+            "Petname listing is not yet supported by the node RPC".to_string(),
+        )),
         PetnameCommands::Introduce {
             introducer_did,
             introducer_sk_hex,

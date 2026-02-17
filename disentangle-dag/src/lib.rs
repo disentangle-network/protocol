@@ -9,16 +9,16 @@
 //! - Added EphemeralIdentity for privacy
 //! - SimHash now structurally bound
 
-use std::collections::{HashMap, HashSet};
 use disentangle_crypto::{
-    signature::{VerifyingKey, Signature},
     hash::sha3_256_multi,
+    signature::{Signature, VerifyingKey},
 };
 use disentangle_simhash::SimHash;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
-pub use disentangle_crypto::types::{NodeId, Nullifier, Epoch};
 pub use disentangle_crypto::hash::Hash256;
+pub use disentangle_crypto::types::{Epoch, NodeId, Nullifier};
 
 pub const SCALE: i32 = 65536;
 pub type FixedPoint = i32;
@@ -110,15 +110,13 @@ impl Transaction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AccountState {
     pub history_root: Hash256,
     pub transaction_count: u64,
     pub first_seen_depth: u64,
     pub reputation_score: u64,
 }
-
 
 #[derive(Debug, Default)]
 pub struct TransactionDAG {
@@ -155,7 +153,7 @@ impl TransactionDAG {
         self.transactions.insert(id, tx);
         Ok(())
     }
-    
+
     /// Insert a transaction without parent validation.
     /// Used for genesis and test scenarios. Still builds children index.
     pub fn insert_genesis(&mut self, tx: Transaction) {
@@ -173,11 +171,11 @@ impl TransactionDAG {
     pub fn get(&self, id: &NodeId) -> Option<&Transaction> {
         self.transactions.get(id)
     }
-    
+
     pub fn contains(&self, id: &NodeId) -> bool {
         self.transactions.contains_key(id)
     }
-    
+
     pub fn has_nullifier(&self, nullifier: &Nullifier) -> bool {
         self.nullifier_set.contains(nullifier)
     }
@@ -395,15 +393,15 @@ impl TransactionDAG {
     pub fn transaction_ids(&self) -> impl Iterator<Item = &NodeId> {
         self.transactions.keys()
     }
-    
+
     pub fn len(&self) -> usize {
         self.transactions.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.transactions.is_empty()
     }
-    
+
     pub fn clear_curvature_cache(&mut self) {
         self.curvature_cache.clear();
     }
@@ -456,7 +454,9 @@ impl TransactionDAG {
             }
             let d = match self.transactions.get(&node) {
                 Some(tx) if !tx.parents.is_empty() => {
-                    1 + tx.parents.iter()
+                    1 + tx
+                        .parents
+                        .iter()
                         .map(|p| self.depth_cache.get(p).copied().unwrap_or(0))
                         .max()
                         .unwrap_or(0)
@@ -487,7 +487,8 @@ impl TransactionDAG {
         if parents.is_empty() {
             return 0;
         }
-        1 + parents.iter()
+        1 + parents
+            .iter()
             .filter_map(|p| self.cached_depth(p))
             .max()
             .unwrap_or(0)
@@ -516,7 +517,7 @@ mod tests {
     fn make_test_tx(nonce_seed: u64, parents: Vec<NodeId>) -> Transaction {
         let (sk, pk) = generate_keypair();
         let history_root = [nonce_seed as u8; 32];
-        let parent_hashes: Vec<Hash256> = parents.iter().copied().collect();
+        let parent_hashes: Vec<Hash256> = parents.to_vec();
         let simhash = SimHash::from_structural(&parent_hashes, &history_root);
         let nullifier = Nullifier::compute(&[0u8; 32], Epoch(0), &nonce_seed.to_le_bytes());
         let mut tx = Transaction {
@@ -549,7 +550,10 @@ mod tests {
         dag.insert_genesis(genesis.clone());
         let mut duplicate = genesis.clone();
         duplicate.id = [1u8; 32];
-        assert!(matches!(dag.insert(duplicate), Err(DagError::DuplicateNullifier)));
+        assert!(matches!(
+            dag.insert(duplicate),
+            Err(DagError::DuplicateNullifier)
+        ));
     }
 
     #[test]
@@ -589,7 +593,10 @@ mod tests {
         // Midpoint: half throttling
         let midpoint = (BOOTSTRAP_START + BOOTSTRAP_END) / 2;
         let mid_alpha = effective_alpha(midpoint);
-        assert!(mid_alpha > 0 && mid_alpha < ALPHA_MAX, "Mid-bootstrap alpha should be between 0 and max");
+        assert!(
+            mid_alpha > 0 && mid_alpha < ALPHA_MAX,
+            "Mid-bootstrap alpha should be between 0 and max"
+        );
 
         // At bootstrap end: full throttling
         assert_eq!(effective_alpha(BOOTSTRAP_END), ALPHA_MAX);
@@ -602,20 +609,29 @@ mod tests {
         let dag = TransactionDAG::new();
 
         // Negative curvature (bridge edge)
-        let negative_curv = -SCALE / 2;  // -0.5 in fixed point
+        let negative_curv = -SCALE / 2; // -0.5 in fixed point
 
         // During bootstrap: no throttling, weight = SCALE
         let weight_early = dag.curvature_weight_at_depth(negative_curv, 500);
-        assert_eq!(weight_early, SCALE, "Early bootstrap should have no throttling");
+        assert_eq!(
+            weight_early, SCALE,
+            "Early bootstrap should have no throttling"
+        );
 
         // After full activation: throttled to minimum
         let weight_late = dag.curvature_weight_at_depth(negative_curv, 10_000);
-        assert_eq!(weight_late, MIN_CURVATURE_WEIGHT, "Full throttling should clamp to minimum");
+        assert_eq!(
+            weight_late, MIN_CURVATURE_WEIGHT,
+            "Full throttling should clamp to minimum"
+        );
 
         // Positive curvature should always give full weight
-        let positive_curv = SCALE / 4;  // +0.25
+        let positive_curv = SCALE / 4; // +0.25
         let weight_pos = dag.curvature_weight_at_depth(positive_curv, 10_000);
-        assert_eq!(weight_pos, SCALE, "Positive curvature should have full weight");
+        assert_eq!(
+            weight_pos, SCALE,
+            "Positive curvature should have full weight"
+        );
     }
 
     #[test]
@@ -641,11 +657,17 @@ mod tests {
         // Curvature is immutable by construction (ancestor-based).
         // Once computed, it is always "frozen" (cached).
         let curv1 = dag.discrete_curvature(&gid, &tx1id);
-        assert!(dag.is_curvature_frozen(&gid, &tx1id), "Curvature should be frozen immediately after computation");
+        assert!(
+            dag.is_curvature_frozen(&gid, &tx1id),
+            "Curvature should be frozen immediately after computation"
+        );
 
         // Recomputing at a different block should return the same value
         let curv2 = dag.discrete_curvature(&gid, &tx1id);
-        assert_eq!(curv1, curv2, "Curvature is immutable — must be same regardless of block");
+        assert_eq!(
+            curv1, curv2,
+            "Curvature is immutable — must be same regardless of block"
+        );
 
         // Verify cached curvature is returned
         let curv3 = dag.discrete_curvature(&gid, &tx1id);
@@ -669,10 +691,16 @@ mod tests {
 
         // Find path weight at different block heights
         let weight_early = dag.find_best_path_weight(&gid, &tx1id, 10, 500);
-        assert!(weight_early > 0, "Path weight should be positive during bootstrap");
+        assert!(
+            weight_early > 0,
+            "Path weight should be positive during bootstrap"
+        );
 
         let weight_late = dag.find_best_path_weight(&gid, &tx1id, 10, 10_000);
-        assert!(weight_late > 0, "Path weight should be positive after bootstrap");
+        assert!(
+            weight_late > 0,
+            "Path weight should be positive after bootstrap"
+        );
     }
 
     #[test]
@@ -697,7 +725,10 @@ mod tests {
         let mut bad_tx = make_test_tx(100, parent_ids[..10].to_vec());
         bad_tx.nullifier = Nullifier::compute(&[100u8; 32], Epoch(0), b"bad");
         bad_tx.id = bad_tx.compute_id();
-        assert!(matches!(dag.insert(bad_tx), Err(DagError::TooManyParents(10, 8))));
+        assert!(matches!(
+            dag.insert(bad_tx),
+            Err(DagError::TooManyParents(10, 8))
+        ));
     }
 
     #[test]
@@ -709,7 +740,10 @@ mod tests {
         let mut bad_tx = make_test_tx(1, vec![]);
         bad_tx.nullifier = Nullifier::compute(&[1u8; 32], Epoch(0), b"empty");
         bad_tx.id = bad_tx.compute_id();
-        assert!(matches!(dag.insert(bad_tx), Err(DagError::TooFewParents(0, _))));
+        assert!(matches!(
+            dag.insert(bad_tx),
+            Err(DagError::TooFewParents(0, _))
+        ));
     }
 
     #[test]
@@ -835,8 +869,10 @@ mod tests {
         let curv_after = dag.discrete_curvature(&aid, &bid);
 
         // CRITICAL: curvature must be identical (ancestor-based = immutable)
-        assert_eq!(curv_before, curv_after,
-            "Curvature must not change when children are added (ancestor-based computation)");
+        assert_eq!(
+            curv_before, curv_after,
+            "Curvature must not change when children are added (ancestor-based computation)"
+        );
     }
 
     #[test]
@@ -895,7 +931,10 @@ mod tests {
         // Jaccard = 1/5, kappa = 2/5 - 1 = -3/5 = -0.6
         let curv_ce = dag.discrete_curvature(&cid, &eid);
         // Still negative in small DAG, but not -1.0 like pure tree
-        assert!(curv_ce > -SCALE, "Should be better than pure tree kappa=-1.0");
+        assert!(
+            curv_ce > -SCALE,
+            "Should be better than pure tree kappa=-1.0"
+        );
     }
 
     // ========================================================================
@@ -916,8 +955,10 @@ mod tests {
         tx_one_parent.id = tx_one_parent.compute_id();
 
         let result = dag.insert(tx_one_parent);
-        assert!(matches!(result, Err(DagError::TooFewParents(1, 2))),
-                "Transaction with 1 parent should be rejected (MIN_PARENTS=2)");
+        assert!(
+            matches!(result, Err(DagError::TooFewParents(1, 2))),
+            "Transaction with 1 parent should be rejected (MIN_PARENTS=2)"
+        );
     }
 
     #[test]
@@ -940,8 +981,10 @@ mod tests {
         tx_two_parents.nullifier = Nullifier::compute(&[2u8; 32], Epoch(0), b"two");
         tx_two_parents.id = tx_two_parents.compute_id();
 
-        assert!(dag.insert(tx_two_parents).is_ok(),
-                "Transaction with 2 parents should succeed (MIN_PARENTS=2)");
+        assert!(
+            dag.insert(tx_two_parents).is_ok(),
+            "Transaction with 2 parents should succeed (MIN_PARENTS=2)"
+        );
     }
 
     #[test]
@@ -968,8 +1011,10 @@ mod tests {
         tx_max.nullifier = Nullifier::compute(&[100u8; 32], Epoch(0), b"max");
         tx_max.id = tx_max.compute_id();
 
-        assert!(dag.insert(tx_max).is_ok(),
-                "Transaction with MAX_PARENTS (8) should succeed");
+        assert!(
+            dag.insert(tx_max).is_ok(),
+            "Transaction with MAX_PARENTS (8) should succeed"
+        );
     }
 
     #[test]
@@ -997,8 +1042,10 @@ mod tests {
         tx_too_many.id = tx_too_many.compute_id();
 
         let result = dag.insert(tx_too_many);
-        assert!(matches!(result, Err(DagError::TooManyParents(9, 8))),
-                "Transaction with 9 parents should be rejected (MAX_PARENTS=8)");
+        assert!(
+            matches!(result, Err(DagError::TooManyParents(9, 8))),
+            "Transaction with 9 parents should be rejected (MAX_PARENTS=8)"
+        );
     }
 
     #[test]
@@ -1020,8 +1067,10 @@ mod tests {
             confidential_outputs: vec![],
         };
 
-        assert!(tx.verify_signature(message),
-                "Valid signature should pass verification");
+        assert!(
+            tx.verify_signature(message),
+            "Valid signature should pass verification"
+        );
     }
 
     #[test]
@@ -1044,8 +1093,10 @@ mod tests {
         };
 
         let tampered_message = b"tampered message";
-        assert!(!tx.verify_signature(tampered_message),
-                "Tampered message should fail verification");
+        assert!(
+            !tx.verify_signature(tampered_message),
+            "Tampered message should fail verification"
+        );
     }
 
     #[test]
@@ -1068,8 +1119,10 @@ mod tests {
             confidential_outputs: vec![],
         };
 
-        assert!(!tx.verify_signature(message),
-                "Signature with wrong key should fail verification");
+        assert!(
+            !tx.verify_signature(message),
+            "Signature with wrong key should fail verification"
+        );
     }
 
     #[test]
@@ -1082,7 +1135,10 @@ mod tests {
 
         // Test with SCALE * SCALE (1.0 * 1.0 = 1.0)
         let result2 = fp_mul(SCALE, SCALE);
-        assert_eq!(result2, SCALE, "SCALE * SCALE should equal SCALE (1.0 * 1.0 = 1.0)");
+        assert_eq!(
+            result2, SCALE,
+            "SCALE * SCALE should equal SCALE (1.0 * 1.0 = 1.0)"
+        );
 
         // Test with large but safe values (100.0 * 2.0 = 200.0)
         let hundred = 100 * SCALE;
@@ -1119,7 +1175,11 @@ mod tests {
     #[test]
     fn test_fp_from_ratio_zero_numerator() {
         // Test with 0/0 (should return 0)
-        assert_eq!(fp_from_ratio(0, 0), 0, "0/0 should return 0 (defined behavior)");
+        assert_eq!(
+            fp_from_ratio(0, 0),
+            0,
+            "0/0 should return 0 (defined behavior)"
+        );
 
         // Test 0/nonzero
         assert_eq!(fp_from_ratio(0, 100), 0, "0/100 should return 0");
@@ -1128,7 +1188,11 @@ mod tests {
     #[test]
     fn test_fp_from_ratio_zero_denominator() {
         // Test with nonzero/0 (should return 0)
-        assert_eq!(fp_from_ratio(100, 0), 0, "100/0 should return 0 (defined behavior)");
+        assert_eq!(
+            fp_from_ratio(100, 0),
+            0,
+            "100/0 should return 0 (defined behavior)"
+        );
     }
 
     #[test]
@@ -1222,7 +1286,10 @@ mod tests {
         // ancestors(D, 2) = {B, C, A} (A appears via both paths but counted once)
         let anc2 = dag.ancestors(&did, 2);
         assert_eq!(anc2.len(), 3, "D should have 3 ancestors at depth 2");
-        assert!(anc2.contains(&aid), "Diamond pattern should include A at depth 2");
+        assert!(
+            anc2.contains(&aid),
+            "Diamond pattern should include A at depth 2"
+        );
         assert!(anc2.contains(&bid) && anc2.contains(&cid));
     }
 
@@ -1251,8 +1318,15 @@ mod tests {
 
         // neighbors(a) should include both g (parent) and b (child)
         let neighbors = dag.neighbors(&aid);
-        assert_eq!(neighbors.len(), 2, "A should have 2 neighbors (1 parent + 1 child)");
-        assert!(neighbors.contains(&gid), "Neighbors should include parent G");
+        assert_eq!(
+            neighbors.len(),
+            2,
+            "A should have 2 neighbors (1 parent + 1 child)"
+        );
+        assert!(
+            neighbors.contains(&gid),
+            "Neighbors should include parent G"
+        );
         assert!(neighbors.contains(&bid), "Neighbors should include child B");
     }
 
@@ -1265,42 +1339,57 @@ mod tests {
         // Test with very negative curvature (should clamp to MIN)
         let very_negative = -SCALE; // -1.0 (maximum negative)
         let weight_min = dag.curvature_weight_with_alpha(very_negative, ALPHA_MAX);
-        assert_eq!(weight_min, MIN_CURVATURE_WEIGHT,
-                   "Very negative curvature should clamp to MIN_CURVATURE_WEIGHT");
+        assert_eq!(
+            weight_min, MIN_CURVATURE_WEIGHT,
+            "Very negative curvature should clamp to MIN_CURVATURE_WEIGHT"
+        );
 
         // Test with positive curvature (should clamp to SCALE)
         let positive = SCALE / 2; // +0.5
         let weight_pos = dag.curvature_weight_with_alpha(positive, ALPHA_MAX);
         // With alpha=3, weight = SCALE + 3 * (SCALE/2) = SCALE + 1.5*SCALE = 2.5*SCALE
         // Should clamp to SCALE
-        assert_eq!(weight_pos, SCALE,
-                   "Positive curvature should clamp to SCALE (max weight)");
+        assert_eq!(
+            weight_pos, SCALE,
+            "Positive curvature should clamp to SCALE (max weight)"
+        );
 
         // Test with zero curvature
         let zero_curv = 0;
         let weight_zero = dag.curvature_weight_with_alpha(zero_curv, ALPHA_MAX);
-        assert_eq!(weight_zero, SCALE, "Zero curvature should give weight = SCALE");
+        assert_eq!(
+            weight_zero, SCALE,
+            "Zero curvature should give weight = SCALE"
+        );
 
         // Test that result is always in valid range
-        for curv in [-SCALE, -SCALE/2, 0, SCALE/4, SCALE/2, SCALE] {
+        for curv in [-SCALE, -SCALE / 2, 0, SCALE / 4, SCALE / 2, SCALE] {
             let w = dag.curvature_weight_with_alpha(curv, ALPHA_MAX);
-            assert!(w >= MIN_CURVATURE_WEIGHT && w <= SCALE,
-                    "Weight should always be in range [MIN_CURVATURE_WEIGHT, SCALE]");
+            assert!(
+                (MIN_CURVATURE_WEIGHT..=SCALE).contains(&w),
+                "Weight should always be in range [MIN_CURVATURE_WEIGHT, SCALE]"
+            );
         }
     }
 
     #[test]
     fn test_effective_alpha_at_bootstrap_start() {
         // Test at exactly BOOTSTRAP_START (block 1000) returns 0
-        assert_eq!(effective_alpha(BOOTSTRAP_START), 0,
-                   "Alpha should be 0 at BOOTSTRAP_START");
+        assert_eq!(
+            effective_alpha(BOOTSTRAP_START),
+            0,
+            "Alpha should be 0 at BOOTSTRAP_START"
+        );
     }
 
     #[test]
     fn test_effective_alpha_at_bootstrap_end() {
         // Test at BOOTSTRAP_END (block 6000) returns ALPHA_MAX
-        assert_eq!(effective_alpha(BOOTSTRAP_END), ALPHA_MAX,
-                   "Alpha should be ALPHA_MAX at BOOTSTRAP_END");
+        assert_eq!(
+            effective_alpha(BOOTSTRAP_END),
+            ALPHA_MAX,
+            "Alpha should be ALPHA_MAX at BOOTSTRAP_END"
+        );
     }
 
     #[test]
@@ -1310,24 +1399,34 @@ mod tests {
         let alpha_mid = effective_alpha(midpoint);
 
         // Linear ramp: at midpoint, should be ~ALPHA_MAX/2 = 1.5, rounds to 1
-        assert!(alpha_mid > 0 && alpha_mid < ALPHA_MAX,
-                "Alpha at midpoint should be between 0 and ALPHA_MAX");
+        assert!(
+            alpha_mid > 0 && alpha_mid < ALPHA_MAX,
+            "Alpha at midpoint should be between 0 and ALPHA_MAX"
+        );
 
         // Check it's proportional: at 25% through ramp
         let quarter = BOOTSTRAP_START + (BOOTSTRAP_END - BOOTSTRAP_START) / 4; // 2250
         let alpha_quarter = effective_alpha(quarter);
-        assert!(alpha_quarter < alpha_mid,
-                "Alpha should increase monotonically through ramp");
+        assert!(
+            alpha_quarter < alpha_mid,
+            "Alpha should increase monotonically through ramp"
+        );
     }
 
     #[test]
     fn test_effective_alpha_boundary_conditions() {
         // Test just before and after boundaries
-        assert_eq!(effective_alpha(BOOTSTRAP_START - 1), 0,
-                   "One depth before bootstrap should have alpha=0");
+        assert_eq!(
+            effective_alpha(BOOTSTRAP_START - 1),
+            0,
+            "One depth before bootstrap should have alpha=0"
+        );
 
-        assert_eq!(effective_alpha(BOOTSTRAP_END + 1), ALPHA_MAX,
-                   "One depth after bootstrap should have alpha=ALPHA_MAX");
+        assert_eq!(
+            effective_alpha(BOOTSTRAP_END + 1),
+            ALPHA_MAX,
+            "One depth after bootstrap should have alpha=ALPHA_MAX"
+        );
     }
 
     // ========================================================================

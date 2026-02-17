@@ -1,13 +1,13 @@
 //! # Entangle SimHash v0.2
-//! 
+//!
 //! Locality-sensitive hashing for Proof of Entanglement with STRICT STRUCTURAL BINDING.
-//! 
+//!
 //! ## Security Invariant
-//! 
+//!
 //! The SimHash MUST be derived ONLY from:
 //! 1. Parent transaction hashes (environmental influence)
 //! 2. Identity history Merkle root (genetic influence)
-//! 
+//!
 //! NO user-controllable content (memo fields, output data, etc.) may influence
 //! the SimHash. This prevents "grinding attacks" where an attacker generates
 //! random transaction content to find a favorable topological position.
@@ -17,9 +17,9 @@
 //! - Added `from_structural()` - only structural inputs accepted
 //! - SHA2 → SHA3-256 for quantum resistance
 
-use sha3::{Sha3_256, Digest};
-use serde::{Serialize, Deserialize};
 use disentangle_crypto::hash::Hash256;
+use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SimHash(pub u128);
@@ -27,13 +27,13 @@ pub struct SimHash(pub u128);
 impl SimHash {
     pub const ZERO: SimHash = SimHash(0);
     pub const BITS: u32 = 128;
-    
+
     /// Compute SimHash from STRUCTURAL INPUTS ONLY.
-    /// 
+    ///
     /// # Arguments
     /// * `parent_hashes` - Hashes of parent transactions (DAG edges)
     /// * `identity_history_root` - Merkle root of sender's transaction history
-    /// 
+    ///
     /// # Security
     /// This function accepts NO user-controllable data. The sender's topological
     /// position is determined entirely by their history and their chosen parents.
@@ -42,7 +42,7 @@ impl SimHash {
         let structural_seed = sha3_combine(&parent_combined, identity_history_root);
         Self::generate_from_seed(&structural_seed)
     }
-    
+
     /// Combine parent SimHashes using majority voting.
     /// Used to compute environmental influence from parent transactions.
     pub fn combine_simhashes(hashes: &[SimHash]) -> SimHash {
@@ -58,21 +58,21 @@ impl SimHash {
         }
         SimHash(result)
     }
-    
+
     /// Hamming distance between two SimHashes.
     /// Lower distance = more similar topological position.
     pub fn hamming_distance(&self, other: &SimHash) -> u32 {
         (self.0 ^ other.0).count_ones()
     }
-    
+
     /// Check if two SimHashes are within coherence threshold.
     pub fn is_coherent(&self, other: &SimHash, threshold: u32) -> bool {
         self.hamming_distance(other) <= threshold
     }
-    
+
     /// Apply bounded drift to SimHash.
     /// Used for natural evolution of position over time.
-    /// 
+    ///
     /// # Arguments
     /// * `seed` - Deterministic seed derived from structural data
     /// * `drift_bits` - Maximum bits allowed to flip
@@ -86,7 +86,7 @@ impl SimHash {
         let mask = create_sparse_mask(noise, drift_bits);
         SimHash(self.0 ^ mask)
     }
-    
+
     fn combine_parent_hashes(parent_hashes: &[Hash256]) -> Hash256 {
         let mut hasher = Sha3_256::new();
         hasher.update(b"PARENT_COMBINE_V2");
@@ -99,7 +99,7 @@ impl SimHash {
         out.copy_from_slice(&result);
         out
     }
-    
+
     fn generate_from_seed(seed: &Hash256) -> Self {
         let mut weights = [0i32; 128];
         let mut hasher = Sha3_256::new();
@@ -241,9 +241,12 @@ mod tests {
         let history = test_hash(100);
         let h1 = SimHash::from_structural(&parents, &history);
         let h2 = SimHash::from_structural(&parents, &history);
-        assert_eq!(h1, h2, "SimHash should be identical regardless of any user data");
+        assert_eq!(
+            h1, h2,
+            "SimHash should be identical regardless of any user data"
+        );
     }
-    
+
     #[test]
     fn test_grinding_resistance() {
         let history = test_hash(100);
@@ -252,7 +255,13 @@ mod tests {
             let parents = vec![test_hash(i)];
             hashes.push(SimHash::from_structural(&parents, &history));
         }
-        let unique_count = hashes.iter().collect::<std::collections::HashSet<_>>().len();
-        assert_eq!(unique_count, 100, "Each unique parent set should produce unique SimHash");
+        let unique_count = hashes
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(
+            unique_count, 100,
+            "Each unique parent set should produce unique SimHash"
+        );
     }
 }
