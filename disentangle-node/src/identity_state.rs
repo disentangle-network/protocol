@@ -6,11 +6,13 @@
 use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_identity::{
-    evaluate_proposal, AgentType, AgreementStatus, AgreementTerms, Capability, CapabilityId,
-    CapabilitySubject, CoherenceProfile, Constraint, ConstraintContext, DIDDocument,
-    DelegationRecord, GovernanceProposal, GovernanceVote, IdentityError, IdentityGraph,
-    IntroductionContext, IntroductionTransaction, PetnameDB, ProposalResult, ProposalType,
-    RevocationScope, ServiceAgreement, VoteChoice, DID,
+    evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
+    CapabilityId, CapabilitySubject, CoherenceProfile, Constraint, ConstraintContext, DIDDocument,
+    DelegationRecord, DistributionRoot, GovernanceProposal, GovernanceVote, IdentityError,
+    IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus, IntroductionContext,
+    IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal, ProposalResult,
+    ProposalStatus, ProposalType, RegionSelector, RevocationScope, SettlementAgreement,
+    SharedIntent, VoteChoice, DID,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,7 +31,11 @@ struct SerializableState {
     first_seen: HashMap<String, u64>,
     proposals: Vec<GovernanceProposal>,
     votes: Vec<GovernanceVote>,
-    agreements: Vec<ServiceAgreement>,
+    agreements: Vec<SettlementAgreement>,
+    // Coordination economy state
+    coord_proposals: Vec<Proposal>,
+    shared_intents: Vec<SharedIntent>,
+    oracle_distributions: Vec<DistributionRoot>,
 }
 
 pub struct IdentityStateManager {
@@ -43,7 +49,11 @@ pub struct IdentityStateManager {
     proposals: HashMap<Hash256, GovernanceProposal>,
     votes: Vec<GovernanceVote>,
     introduction_history: Vec<IntroductionTransaction>, // For persistence
-    agreements: HashMap<Hash256, ServiceAgreement>,
+    agreements: HashMap<Hash256, SettlementAgreement>,
+    // Coordination economy state
+    coord_proposals: HashMap<Hash256, Proposal>,
+    shared_intents: HashMap<Hash256, SharedIntent>,
+    oracle_distributions: HashMap<Hash256, DistributionRoot>,
 }
 
 impl Default for IdentityStateManager {
@@ -66,6 +76,9 @@ impl IdentityStateManager {
             votes: Vec::new(),
             introduction_history: Vec::new(),
             agreements: HashMap::new(),
+            coord_proposals: HashMap::new(),
+            shared_intents: HashMap::new(),
+            oracle_distributions: HashMap::new(),
         }
     }
 
@@ -611,7 +624,7 @@ impl IdentityStateManager {
         );
         let signature = sign(provider_sk, message.as_bytes());
 
-        let agreement = ServiceAgreement::new(
+        let agreement = SettlementAgreement::new(
             provider_did.to_string(),
             consumer_did.to_string(),
             capability_id.copied(),
@@ -678,16 +691,607 @@ impl IdentityStateManager {
     }
 
     /// Get an agreement by ID
-    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&ServiceAgreement> {
+    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&SettlementAgreement> {
         self.agreements.get(agreement_id)
     }
 
     /// List all agreements involving a specific DID
-    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&ServiceAgreement> {
+    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&SettlementAgreement> {
         self.agreements
             .values()
             .filter(|agreement| agreement.involves_did(did))
             .collect()
+    }
+
+    // Coordination Proposal Operations
+
+    /// Create a new coordination proposal
+    pub fn create_coordination_proposal(
+        &mut self,
+        initiator_did: &str,
+        description: String,
+        intent_hash: Hash256,
+        activation_mass: f64,
+        min_participants: u32,
+        expiry_depth: u64,
+    ) -> Result<Hash256, IdentityError> {
+        // Verify initiator exists and has CoherenceMinimum
+        if !self.did_registry.contains_key(initiator_did) {
+            return Err(IdentityError::DIDNotFound(initiator_did.to_string()));
+        }
+
+        // Check coherence minimum
+        let profile = self.get_coherence_profile(initiator_did).ok_or_else(|| {
+            IdentityError::ConstraintNotSatisfied("No coherence profile".to_string())
+        })?;
+
+        // CoherenceMinimum check (similar to capability constraints)
+        if profile.topological_mass <= 0 {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Insufficient coherence".to_string(),
+            ));
+        }
+
+        let proposal = Proposal::new(
+            initiator_did.to_string(),
+            intent_hash,
+            description,
+            activation_mass,
+            min_participants,
+            expiry_depth,
+            self.current_depth,
+        );
+
+        let proposal_id = proposal.id;
+        self.coord_proposals.insert(proposal_id, proposal);
+
+        Ok(proposal_id)
+    }
+
+    /// Join a coordination proposal
+    pub fn join_coordination_proposal(
+        &mut self,
+        proposal_id: &Hash256,
+        joiner_did: &str,
+    ) -> Result<Option<Hash256>, IdentityError> {
+        // Verify joiner exists and has CoherenceMinimum
+        if !self.did_registry.contains_key(joiner_did) {
+            return Err(IdentityError::DIDNotFound(joiner_did.to_string()));
+        }
+
+        let profile = self.get_coherence_profile(joiner_did).ok_or_else(|| {
+            IdentityError::ConstraintNotSatisfied("No coherence profile".to_string())
+        })?;
+
+        if profile.topological_mass <= 0 {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Insufficient coherence".to_string(),
+            ));
+        }
+
+        // First pass: add joiner and check activation
+        let should_activate = {
+            let proposal = self
+                .coord_proposals
+                .get_mut(proposal_id)
+                .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(proposal_id)))?;
+
+            // Check if already joined
+            if proposal.joiners.iter().any(|j| j.did == joiner_did) {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Already joined".to_string(),
+                ));
+            }
+
+            // Check if proposal is still attracting
+            if proposal.status != ProposalStatus::Attracting {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Proposal not accepting joins".to_string(),
+                ));
+            }
+
+            // Add joiner
+            let committed_mass = profile.topological_mass as f64;
+            proposal.joiners.push(JoinCommitment {
+                did: joiner_did.to_string(),
+                committed_mass,
+                join_depth: self.current_depth,
+            });
+            proposal.committed_mass += committed_mass;
+
+            proposal.check_activation()
+        };
+
+        // Second pass: create intent if activated
+        if should_activate {
+            let intent_id = self.create_intent_from_proposal(proposal_id)?;
+            if let Some(proposal) = self.coord_proposals.get_mut(proposal_id) {
+                proposal.status = ProposalStatus::Activated { intent_id };
+            }
+            Ok(Some(intent_id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if proposal should activate
+    pub fn check_coordination_proposal_activation(
+        &mut self,
+        proposal_id: &Hash256,
+    ) -> Option<Hash256> {
+        let should_activate = {
+            let proposal = self.coord_proposals.get(proposal_id)?;
+            proposal.check_activation() && proposal.status == ProposalStatus::Attracting
+        };
+
+        if should_activate {
+            // Auto-create SharedIntent
+            if let Ok(intent_id) = self.create_intent_from_proposal(proposal_id) {
+                if let Some(proposal) = self.coord_proposals.get_mut(proposal_id) {
+                    proposal.status = ProposalStatus::Activated { intent_id };
+                }
+                return Some(intent_id);
+            }
+        }
+
+        None
+    }
+
+    /// Get a coordination proposal by ID
+    pub fn get_coordination_proposal(&self, proposal_id: &Hash256) -> Option<&Proposal> {
+        self.coord_proposals.get(proposal_id)
+    }
+
+    /// List coordination proposals with optional status filter
+    pub fn list_coordination_proposals(&self, status: Option<ProposalStatus>) -> Vec<&Proposal> {
+        match status {
+            Some(s) => self
+                .coord_proposals
+                .values()
+                .filter(|p| p.status == s)
+                .collect(),
+            None => self.coord_proposals.values().collect(),
+        }
+    }
+
+    /// List proposals initiated by or joined by a DID
+    pub fn list_coordination_proposals_for_did(&self, did: &str) -> Vec<&Proposal> {
+        self.coord_proposals
+            .values()
+            .filter(|p| p.initiator_did == did || p.joiners.iter().any(|j| j.did == did))
+            .collect()
+    }
+
+    // SharedIntent Operations
+
+    /// Create a new SharedIntent directly (not from proposal)
+    pub fn create_shared_intent(
+        &mut self,
+        description: String,
+        intent_hash: Hash256,
+        participant_dids: Vec<String>,
+        capability_ids: Vec<Vec<Hash256>>,
+    ) -> Result<Hash256, IdentityError> {
+        // Verify all participants exist
+        for did in &participant_dids {
+            if !self.did_registry.contains_key(did) {
+                return Err(IdentityError::DIDNotFound(did.to_string()));
+            }
+        }
+
+        // Build participants list
+        let mut participants = Vec::new();
+        for (i, did) in participant_dids.iter().enumerate() {
+            let profile = self.get_coherence_profile(did).ok_or_else(|| {
+                IdentityError::ConstraintNotSatisfied("No coherence profile".to_string())
+            })?;
+
+            let caps = capability_ids.get(i).cloned().unwrap_or_default();
+
+            participants.push(IntentParticipant {
+                did: did.clone(),
+                joined_depth: self.current_depth,
+                mass_at_join: profile.topological_mass as f64,
+                contributed_capabilities: caps,
+            });
+        }
+
+        // Compute baseline metrics
+        let baseline_mass: f64 = participants.iter().map(|p| p.mass_at_join).sum();
+        let baseline_curvature = self.compute_group_curvature(&participant_dids);
+
+        let intent = SharedIntent::new(
+            None,
+            description,
+            intent_hash,
+            participants,
+            self.current_depth,
+            baseline_curvature,
+            baseline_mass,
+        );
+
+        let intent_id = intent.id;
+        self.shared_intents.insert(intent_id, intent);
+
+        Ok(intent_id)
+    }
+
+    /// Create SharedIntent from an activated proposal
+    pub fn create_intent_from_proposal(
+        &mut self,
+        proposal_id: &Hash256,
+    ) -> Result<Hash256, IdentityError> {
+        let proposal = self
+            .coord_proposals
+            .get(proposal_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(proposal_id)))?;
+
+        let participant_dids: Vec<String> =
+            proposal.joiners.iter().map(|j| j.did.clone()).collect();
+
+        // Build participants from proposal joiners
+        let mut participants = Vec::new();
+        for joiner in &proposal.joiners {
+            participants.push(IntentParticipant {
+                did: joiner.did.clone(),
+                joined_depth: joiner.join_depth,
+                mass_at_join: joiner.committed_mass,
+                contributed_capabilities: vec![],
+            });
+        }
+
+        let baseline_curvature = self.compute_group_curvature(&participant_dids);
+
+        let intent = SharedIntent::new(
+            Some(*proposal_id),
+            proposal.description.clone(),
+            proposal.intent_hash,
+            participants,
+            self.current_depth,
+            baseline_curvature,
+            proposal.committed_mass,
+        );
+
+        let intent_id = intent.id;
+        self.shared_intents.insert(intent_id, intent);
+
+        Ok(intent_id)
+    }
+
+    /// Join an existing SharedIntent
+    pub fn join_shared_intent(
+        &mut self,
+        intent_id: &Hash256,
+        joiner_did: &str,
+        capabilities: Vec<Hash256>,
+    ) -> Result<(), IdentityError> {
+        // Verify joiner exists and has CoherenceMinimum
+        if !self.did_registry.contains_key(joiner_did) {
+            return Err(IdentityError::DIDNotFound(joiner_did.to_string()));
+        }
+
+        let profile = self.get_coherence_profile(joiner_did).ok_or_else(|| {
+            IdentityError::ConstraintNotSatisfied("No coherence profile".to_string())
+        })?;
+
+        if profile.topological_mass <= 0 {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Insufficient coherence".to_string(),
+            ));
+        }
+
+        // First pass: validate and check introduction chain
+        let can_join = {
+            let intent = self
+                .shared_intents
+                .get(intent_id)
+                .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(intent_id)))?;
+
+            // Check if intent is active
+            if intent.status != IntentStatus::Active {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Intent not active".to_string(),
+                ));
+            }
+
+            // Check if already a participant
+            if intent.has_participant(joiner_did) {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Already a participant".to_string(),
+                ));
+            }
+
+            // Check introduction chain (at least one existing participant must have positive curvature with joiner)
+            let participant_dids: Vec<String> =
+                intent.participants.iter().map(|p| p.did.clone()).collect();
+            participant_dids.iter().any(|p_did| {
+                self.get_identity_curvature(p_did, joiner_did)
+                    .map(|c| c > 0.0)
+                    .unwrap_or(false)
+            })
+        };
+
+        if !can_join {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "No introduction chain".to_string(),
+            ));
+        }
+
+        // Second pass: add participant
+        let intent = self
+            .shared_intents
+            .get_mut(intent_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(intent_id)))?;
+
+        intent.participants.push(IntentParticipant {
+            did: joiner_did.to_string(),
+            joined_depth: self.current_depth,
+            mass_at_join: profile.topological_mass as f64,
+            contributed_capabilities: capabilities,
+        });
+
+        Ok(())
+    }
+
+    /// Archive a SharedIntent
+    pub fn archive_shared_intent(
+        &mut self,
+        intent_id: &Hash256,
+        archiver_did: &str,
+    ) -> Result<IntentStatus, IdentityError> {
+        // First pass: validate and compute deltas
+        let (participant_dids, baseline_mass, baseline_curvature) = {
+            let intent = self
+                .shared_intents
+                .get(intent_id)
+                .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(intent_id)))?;
+
+            // Check if archiver is a participant
+            if !intent.has_participant(archiver_did) {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Not a participant".to_string(),
+                ));
+            }
+
+            // Check if intent is active
+            if intent.status != IntentStatus::Active {
+                return Err(IdentityError::ConstraintNotSatisfied(
+                    "Intent not active".to_string(),
+                ));
+            }
+
+            let participant_dids: Vec<String> =
+                intent.participants.iter().map(|p| p.did.clone()).collect();
+            (
+                participant_dids,
+                intent.baseline_mass,
+                intent.baseline_curvature,
+            )
+        };
+
+        // Compute coherence delta
+        let current_mass: f64 = participant_dids
+            .iter()
+            .map(|did| {
+                self.get_coherence_profile(did)
+                    .map(|p| p.topological_mass as f64)
+                    .unwrap_or(0.0)
+            })
+            .sum();
+        let current_curvature = self.compute_group_curvature(&participant_dids);
+
+        let mass_delta = current_mass - baseline_mass;
+        let curvature_delta = current_curvature - baseline_curvature;
+
+        // Compute composite coherence delta (simplified)
+        let coherence_delta = mass_delta + curvature_delta * 10.0; // Weight curvature more
+
+        // Second pass: archive
+        let intent = self
+            .shared_intents
+            .get_mut(intent_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(intent_id)))?;
+
+        intent.archive(self.current_depth, coherence_delta);
+
+        Ok(intent.status.clone())
+    }
+
+    /// Get a SharedIntent by ID
+    pub fn get_shared_intent(&self, intent_id: &Hash256) -> Option<&SharedIntent> {
+        self.shared_intents.get(intent_id)
+    }
+
+    /// List SharedIntents with optional status filter
+    pub fn list_shared_intents(&self, status: Option<IntentStatus>) -> Vec<&SharedIntent> {
+        match status {
+            Some(s) => self
+                .shared_intents
+                .values()
+                .filter(|i| i.status == s)
+                .collect(),
+            None => self.shared_intents.values().collect(),
+        }
+    }
+
+    /// List SharedIntents for a DID
+    pub fn list_shared_intents_for_did(&self, did: &str) -> Vec<&SharedIntent> {
+        self.shared_intents
+            .values()
+            .filter(|i| i.has_participant(did))
+            .collect()
+    }
+
+    /// Get coherence snapshot for an intent
+    pub fn intent_coherence_snapshot(
+        &self,
+        intent_id: &Hash256,
+    ) -> Option<IntentCoherenceSnapshot> {
+        let intent = self.shared_intents.get(intent_id)?;
+
+        let participant_dids: Vec<String> =
+            intent.participants.iter().map(|p| p.did.clone()).collect();
+        let current_mass: f64 = participant_dids
+            .iter()
+            .map(|did| {
+                self.get_coherence_profile(did)
+                    .map(|p| p.topological_mass as f64)
+                    .unwrap_or(0.0)
+            })
+            .sum();
+        let current_curvature = self.compute_group_curvature(&participant_dids);
+
+        Some(IntentCoherenceSnapshot {
+            intent_id: *intent_id,
+            participant_count: intent.participants.len(),
+            baseline_mass: intent.baseline_mass,
+            current_mass,
+            mass_delta: current_mass - intent.baseline_mass,
+            baseline_curvature: intent.baseline_curvature,
+            current_curvature,
+            curvature_delta: current_curvature - intent.baseline_curvature,
+            depth: self.current_depth,
+        })
+    }
+
+    // Oracle Operations
+
+    /// Compute distribution for an oracle query
+    pub fn compute_oracle_distribution(
+        &mut self,
+        query: OracleQuery,
+    ) -> Result<Hash256, IdentityError> {
+        // Get DIDs in the region
+        let dids = match &query.region {
+            RegionSelector::Neighborhood(_) => {
+                // Would need to compute neighborhoods, simplified for now
+                self.did_registry.keys().cloned().collect()
+            }
+            RegionSelector::Intent(intent_id) => {
+                let intent = self
+                    .shared_intents
+                    .get(intent_id)
+                    .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(intent_id)))?;
+                intent.participants.iter().map(|p| p.did.clone()).collect()
+            }
+            RegionSelector::Explicit(dids) => dids.clone(),
+            RegionSelector::Global => self.did_registry.keys().cloned().collect(),
+        };
+
+        // Compute scores for each agent
+        let mut scores = HashMap::new();
+        for did in &dids {
+            // Compute mass delta over window
+            let did_obj = DID(did.clone());
+            let first_seen = self
+                .first_seen
+                .get(did)
+                .copied()
+                .unwrap_or(query.depth_start);
+
+            let profile_start = CoherenceProfile::compute(
+                &did_obj,
+                &self.identity_graph,
+                first_seen,
+                query.depth_start,
+            );
+            let profile_end = CoherenceProfile::compute(
+                &did_obj,
+                &self.identity_graph,
+                first_seen,
+                query.depth_end,
+            );
+
+            let mass_delta =
+                profile_end.topological_mass as f64 - profile_start.topological_mass as f64;
+
+            // Compute curvature delta (mean curvature with other DIDs in region)
+            let curvature_start = self.compute_group_member_curvature(did, &dids);
+            let curvature_end = self.compute_group_member_curvature(did, &dids);
+            let curvature_delta = curvature_end - curvature_start;
+
+            // Compute diversity (distinct positive-curvature connections in region)
+            let diversity = dids
+                .iter()
+                .filter(|other| *other != did)
+                .filter(|other| {
+                    self.get_identity_curvature(did, other)
+                        .map(|c| c > 0.0)
+                        .unwrap_or(false)
+                })
+                .count() as u32;
+
+            let mut score = AgentScore {
+                did: did.clone(),
+                mass_delta,
+                curvature_delta,
+                diversity,
+                composite: 0.0,
+            };
+            score.compute_composite();
+
+            scores.insert(did.clone(), score);
+        }
+
+        let distribution = DistributionRoot::new(&query, scores, self.current_depth);
+        let distribution_id = distribution.query_id;
+
+        self.oracle_distributions
+            .insert(distribution_id, distribution);
+
+        Ok(distribution_id)
+    }
+
+    /// Get a distribution by ID
+    pub fn get_oracle_distribution(&self, distribution_id: &Hash256) -> Option<&DistributionRoot> {
+        self.oracle_distributions.get(distribution_id)
+    }
+
+    /// List all distributions
+    pub fn list_oracle_distributions(&self) -> Vec<&DistributionRoot> {
+        self.oracle_distributions.values().collect()
+    }
+
+    // Helper methods
+
+    /// Compute mean curvature among a group of DIDs
+    fn compute_group_curvature(&self, dids: &[String]) -> f64 {
+        if dids.len() < 2 {
+            return 0.0;
+        }
+
+        let mut curvature_sum = 0.0;
+        let mut edge_count = 0;
+
+        for i in 0..dids.len() {
+            for j in (i + 1)..dids.len() {
+                if let Some(curvature) = self.get_identity_curvature(&dids[i], &dids[j]) {
+                    curvature_sum += curvature;
+                    edge_count += 1;
+                }
+            }
+        }
+
+        if edge_count > 0 {
+            curvature_sum / edge_count as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Compute mean curvature between a DID and a group
+    fn compute_group_member_curvature(&self, did: &str, group: &[String]) -> f64 {
+        let curvatures: Vec<f64> = group
+            .iter()
+            .filter(|other| *other != did)
+            .filter_map(|other| self.get_identity_curvature(did, other))
+            .collect();
+
+        if curvatures.is_empty() {
+            0.0
+        } else {
+            curvatures.iter().sum::<f64>() / curvatures.len() as f64
+        }
     }
 
     // Persistence Operations
@@ -716,7 +1320,11 @@ impl IdentityStateManager {
         let introductions = self.introduction_history.clone();
 
         let proposals: Vec<GovernanceProposal> = self.proposals.values().cloned().collect();
-        let agreements: Vec<ServiceAgreement> = self.agreements.values().cloned().collect();
+        let agreements: Vec<SettlementAgreement> = self.agreements.values().cloned().collect();
+        let coord_proposals: Vec<Proposal> = self.coord_proposals.values().cloned().collect();
+        let shared_intents: Vec<SharedIntent> = self.shared_intents.values().cloned().collect();
+        let oracle_distributions: Vec<DistributionRoot> =
+            self.oracle_distributions.values().cloned().collect();
 
         let state = SerializableState {
             did_registry_keys,
@@ -730,6 +1338,9 @@ impl IdentityStateManager {
             proposals,
             votes: self.votes.clone(),
             agreements,
+            coord_proposals,
+            shared_intents,
+            oracle_distributions,
         };
 
         let json = serde_json::to_string_pretty(&state)
@@ -808,6 +1419,24 @@ impl IdentityStateManager {
             agreements.insert(agreement.id, agreement);
         }
 
+        // Reconstruct coordination proposals
+        let mut coord_proposals = HashMap::new();
+        for proposal in state.coord_proposals {
+            coord_proposals.insert(proposal.id, proposal);
+        }
+
+        // Reconstruct shared intents
+        let mut shared_intents = HashMap::new();
+        for intent in state.shared_intents {
+            shared_intents.insert(intent.id, intent);
+        }
+
+        // Reconstruct oracle distributions
+        let mut oracle_distributions = HashMap::new();
+        for distribution in state.oracle_distributions {
+            oracle_distributions.insert(distribution.query_id, distribution);
+        }
+
         Ok(Self {
             did_registry,
             capability_store,
@@ -820,6 +1449,9 @@ impl IdentityStateManager {
             votes: state.votes,
             introduction_history: state.introductions,
             agreements,
+            coord_proposals,
+            shared_intents,
+            oracle_distributions,
         })
     }
 

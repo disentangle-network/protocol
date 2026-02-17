@@ -14,6 +14,7 @@ use sha3::{Digest, Sha3_256};
 pub mod event_stream;
 pub mod identity_rpc;
 pub mod identity_state;
+pub mod topology_events;
 
 pub struct HelloWorldPoW {
     pub target: [u8; 32],

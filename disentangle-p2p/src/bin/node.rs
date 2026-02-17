@@ -9,7 +9,9 @@ use disentangle_crypto::{
     types::{Epoch, Nullifier},
 };
 use disentangle_dag::{NodeId, Transaction, SCALE};
-use disentangle_node::{identity_rpc, identity_state::IdentityStateManager, HelloWorldPoW};
+use disentangle_node::{
+    event_stream::EventBus, identity_rpc, identity_state::IdentityStateManager, HelloWorldPoW,
+};
 use disentangle_p2p::{
     behaviour::{DisentangleRequest, DisentangleResponse},
     build_swarm, generate_keypair, parse_peer_addr, SyncResult, SyncState, WireMessage,
@@ -54,6 +56,7 @@ struct SharedState {
     conflicts_resolved: Arc<Mutex<Vec<ConflictRecord>>>,
     cmd_tx: mpsc::Sender<NodeCommand>,
     identity: Arc<Mutex<IdentityStateManager>>,
+    event_bus: Arc<EventBus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -432,6 +435,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let event_bus = Arc::new(EventBus::new(1000));
+
     let shared_state = SharedState {
         sync: Arc::new(Mutex::new(SyncState::new(POW_DIFFICULTY))),
         local_peer_id,
@@ -440,6 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         conflicts_resolved: Arc::new(Mutex::new(Vec::new())),
         cmd_tx: cmd_tx.clone(),
         identity: Arc::new(Mutex::new(identity_manager)),
+        event_bus: event_bus.clone(),
     };
     // Only bootstrap node (no bootstrap_addr) creates genesis
     // Follower nodes will receive genesis via sync protocol
@@ -454,7 +460,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-    // Create identity router with its own state
+    // Create identity router with IdentityState (Arc<Mutex<IdentityStateManager>>)
     let identity_state = shared_state.identity.clone();
     let identity_router = Router::new()
         // Identity endpoints
@@ -492,6 +498,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/capability/by-did/:did",
             get(identity_rpc::capability_list_by_did_handler),
+        )
+        // Capability templates
+        .route(
+            "/capability/templates",
+            get(identity_rpc::capability_templates_handler),
+        )
+        .route(
+            "/capability/create-from-template",
+            post(identity_rpc::capability_create_from_template_handler),
         )
         // Introduction endpoints
         .route(
@@ -535,7 +550,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/governance/:proposal_id_hex",
             get(identity_rpc::governance_get_proposal_handler),
         )
+        // Agreement endpoints
+        .route(
+            "/agreement/propose",
+            post(identity_rpc::agreement_propose_handler),
+        )
+        .route(
+            "/agreement/accept",
+            post(identity_rpc::agreement_accept_handler),
+        )
+        .route(
+            "/agreement/complete",
+            post(identity_rpc::agreement_complete_handler),
+        )
+        .route(
+            "/agreement/:agreement_id_hex",
+            get(identity_rpc::agreement_get_handler),
+        )
+        .route(
+            "/agreement/by-did/:did",
+            get(identity_rpc::agreement_list_by_did_handler),
+        )
         .with_state(identity_state);
+
+    // Create shared state router for endpoints that need EventBus
+    let rpc_shared_state = identity_rpc::SharedState {
+        identity: shared_state.identity.clone(),
+        event_bus: shared_state.event_bus.clone(),
+    };
+    let shared_router = Router::new()
+        .route("/network/health", get(identity_rpc::network_health_handler))
+        .route("/watch", get(identity_rpc::watch_handler))
+        .with_state(rpc_shared_state);
 
     let app = Router::new()
         .route("/status", get(status_handler))
@@ -543,6 +589,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/transaction", post(submit_tx_handler))
         .route("/debug/trigger-conflict", post(trigger_conflict_handler))
         .merge(identity_router)
+        .merge(shared_router)
         .layer(cors)
         .with_state(shared_state.clone());
     let rpc_addr = format!("0.0.0.0:{}", rpc_port);
