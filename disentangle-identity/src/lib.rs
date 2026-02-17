@@ -20,7 +20,10 @@ pub mod coherence;
 pub mod did;
 pub mod governance;
 pub mod graph;
+pub mod intent;
+pub mod oracle;
 pub mod petname;
+pub mod proposal;
 pub mod transactions;
 
 // Re-export main types
@@ -43,7 +46,10 @@ pub use governance::{
     ProposalType, VoteChoice,
 };
 pub use graph::IdentityGraph;
+pub use intent::{IntentCoherenceSnapshot, IntentParticipant, IntentStatus, SharedIntent};
+pub use oracle::{AgentScore, DistributionRoot, OracleQuery, RegionSelector};
 pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
+pub use proposal::{JoinCommitment, Proposal, ProposalStatus};
 pub use transactions::{
     CapabilityOperation, CapabilityTransaction, DIDDeactivation, DIDRegistration, DIDUpdate,
     DIDUpdateOp, DisentangleTransaction, GovernanceTransaction, IdentityTransaction,

@@ -1651,6 +1651,14 @@ fn should_emit_event(
             }
             NodeEvent::CoherenceChanged { .. } => "coherence",
             NodeEvent::TransactionMined { .. } => "transaction",
+            NodeEvent::ProposalCreated { .. }
+            | NodeEvent::ProposalJoined { .. }
+            | NodeEvent::ProposalActivated { .. } => "proposal",
+            NodeEvent::IntentCreated { .. }
+            | NodeEvent::IntentJoined { .. }
+            | NodeEvent::IntentArchived { .. } => "intent",
+            NodeEvent::NeighborhoodMerge { .. } | NodeEvent::NeighborhoodSplit { .. } => "topology",
+            NodeEvent::DistributionComputed { .. } => "oracle",
         };
         topics.contains(event_topic)
     };

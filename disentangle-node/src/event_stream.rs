@@ -53,6 +53,54 @@ pub enum NodeEvent {
         depth: u64,
         dag_size: u64,
     },
+    // Coordination economy events
+    ProposalCreated {
+        proposal_id: String,
+        initiator_did: String,
+        activation_mass: f64,
+    },
+    ProposalJoined {
+        proposal_id: String,
+        joiner_did: String,
+        committed_mass: f64,
+        total_mass: f64,
+    },
+    ProposalActivated {
+        proposal_id: String,
+        intent_id: String,
+        participants: Vec<String>,
+    },
+    IntentCreated {
+        intent_id: String,
+        source_proposal: Option<String>,
+        participants: Vec<String>,
+    },
+    IntentJoined {
+        intent_id: String,
+        joiner_did: String,
+    },
+    IntentArchived {
+        intent_id: String,
+        mass_delta: f64,
+        curvature_delta: f64,
+    },
+    NeighborhoodMerge {
+        primary_neighborhood: String,
+        merging_neighborhood: String,
+        boundary_curvature: f64,
+        combined_mass: f64,
+    },
+    NeighborhoodSplit {
+        original_neighborhood: String,
+        new_neighborhoods: Vec<String>,
+        split_edge_curvature: f64,
+    },
+    DistributionComputed {
+        query_id: String,
+        region: String,
+        recipient_count: usize,
+        merkle_root: String,
+    },
 }
 
 /// Event bus for broadcasting node events to subscribers
