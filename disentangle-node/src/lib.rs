@@ -11,6 +11,7 @@ use disentangle_dag::{NodeId, Transaction};
 use disentangle_simhash::SimHash;
 use sha3::{Digest, Sha3_256};
 
+pub mod event_stream;
 pub mod identity_rpc;
 pub mod identity_state;
 

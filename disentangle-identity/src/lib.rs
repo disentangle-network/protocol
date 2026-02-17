@@ -14,6 +14,7 @@
 //! This is Phase 1 of the implementation, providing core types without ZK proofs
 //! or networking. ZK integration (Phase 2) and full DAG integration (Phase 3) will follow.
 
+pub mod agreement;
 pub mod capability;
 pub mod coherence;
 pub mod did;
@@ -23,9 +24,11 @@ pub mod petname;
 pub mod transactions;
 
 // Re-export main types
+pub use agreement::{AgreementStatus, AgreementTerms, ServiceAgreement};
 pub use capability::{
-    AccessOp, Capability, CapabilityId, CapabilitySubject, Constraint, ConstraintContext,
-    DelegationRecord, GovernanceScope, NameOp, RevocationScope, TransactionScope,
+    AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, Constraint,
+    ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
+    TransactionScope,
 };
 pub use coherence::{CoherenceProfile, COHERENCE_HALF_LIFE};
 pub use did::{

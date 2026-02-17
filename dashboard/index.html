@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coherence Explorer - Disentangle Protocol</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0b0f;--bg2:#12141c;--bg3:#1a1d2a;
+  --text:#e8e6e3;--text-dim:#8b8d95;--text-faint:#4a4d58;
+  --accent:#3b82f6;--positive:#22c55e;--negative:#ef4444;
+  --font-mono:'JetBrains Mono',monospace;
+  --font-body:'DM Sans',sans-serif;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body);margin:0;overflow:hidden}
+
+/* Layout */
+.container{display:grid;grid-template-columns:1fr 380px;grid-template-rows:auto 1fr;height:100vh;gap:0}
+.header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid rgba(255,255,255,0.04);padding:1rem 1.5rem;display:flex;justify-content:space-between;align-items:center}
+.graph-area{grid-column:1;grid-row:2;position:relative;overflow:hidden;background:var(--bg)}
+.sidebar{grid-column:2;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow:hidden}
+
+/* Header */
+.header-left{display:flex;align-items:center;gap:1rem}
+.logo{font-family:var(--font-mono);font-weight:700;font-size:1rem;color:var(--text)}
+.logo span{color:var(--accent)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--positive);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:0.6}50%{opacity:1}}
+.header-stats{display:flex;gap:2rem;font-family:var(--font-mono);font-size:0.75rem}
+.stat-item{display:flex;flex-direction:column}
+.stat-label{color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;font-size:0.65rem}
+.stat-value{color:var(--text);font-weight:700;font-size:0.85rem;margin-top:0.15rem}
+.stat-value.positive{color:var(--positive)}
+.stat-value.negative{color:var(--negative)}
+
+/* Graph */
+svg.graph{width:100%;height:100%}
+.node{cursor:pointer;transition:opacity 0.2s}
+.node:hover{opacity:1 !important}
+.link{stroke-opacity:0.4;transition:stroke-opacity 0.2s,stroke-width 0.2s}
+.link.negative{stroke:var(--negative);stroke-dasharray:4,2}
+.link.positive{stroke:var(--positive)}
+.link.bridge{stroke:var(--text-faint);stroke-dasharray:2,2}
+.tooltip{position:absolute;background:var(--bg2);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:0.75rem 1rem;font-family:var(--font-mono);font-size:0.7rem;pointer-events:none;opacity:0;transition:opacity 0.2s;box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:100}
+.tooltip .did{color:var(--accent);font-weight:700;margin-bottom:0.5rem}
+.tooltip .metric{display:flex;justify-content:space-between;gap:1rem;margin:0.25rem 0}
+.tooltip .metric-label{color:var(--text-dim)}
+.tooltip .metric-value{color:var(--text);font-weight:700}
+
+/* Sidebar */
+.sidebar-section{padding:1.25rem;border-bottom:1px solid rgba(255,255,255,0.04)}
+.section-title{font-family:var(--font-mono);font-size:0.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin-bottom:0.75rem}
+.controls{display:flex;flex-direction:column;gap:0.75rem}
+.btn{padding:0.65rem 1rem;border:1px solid rgba(255,255,255,0.12);border-radius:6px;background:transparent;color:var(--text);font-family:var(--font-mono);font-size:0.75rem;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:0.5rem}
+.btn:hover{border-color:var(--accent);background:rgba(59,130,246,0.05)}
+.btn.danger{border-color:rgba(239,68,68,0.3);color:var(--negative)}
+.btn.danger:hover{border-color:var(--negative);background:rgba(239,68,68,0.05)}
+.btn:disabled{opacity:0.4;cursor:not-allowed}
+.btn:disabled:hover{border-color:rgba(255,255,255,0.12);background:transparent}
+.scoreboard{flex:1;overflow-y:auto;padding:1.25rem}
+.scoreboard-item{padding:0.65rem;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--bg);margin-bottom:0.5rem;font-family:var(--font-mono);font-size:0.7rem;cursor:pointer;transition:border-color 0.2s}
+.scoreboard-item:hover{border-color:rgba(59,130,246,0.3)}
+.scoreboard-item.selected{border-color:var(--accent)}
+.did-short{color:var(--text);font-weight:700;margin-bottom:0.35rem;display:flex;justify-content:space-between;align-items:center}
+.rank-badge{background:var(--bg2);color:var(--text-dim);padding:0.15rem 0.4rem;border-radius:3px;font-size:0.65rem}
+.score-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-size:0.65rem}
+.score-item{display:flex;flex-direction:column}
+.score-label{color:var(--text-dim)}
+.score-value{color:var(--text);font-weight:700}
+.score-value.high{color:var(--positive)}
+.score-value.medium{color:var(--accent)}
+.score-value.low{color:var(--negative)}
+.empty-state{text-align:center;color:var(--text-dim);font-family:var(--font-mono);font-size:0.7rem;padding:2rem 1rem}
+
+/* Attack mode feedback */
+.attack-feedback{padding:0.65rem;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font-family:var(--font-mono);font-size:0.65rem;color:var(--negative);margin-top:0.5rem;display:none}
+.attack-feedback.show{display:block}
+
+/* Responsive */
+@media(max-width:1200px){
+  .container{grid-template-columns:1fr 320px}
+  .header-stats{gap:1rem}
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo"><span>⬡</span> coherence explorer</div>
+    <div class="status-dot"></div>
+  </div>
+  <div class="header-stats">
+    <div class="stat-item">
+      <div class="stat-label">DAG Size</div>
+      <div class="stat-value" id="dagSize">—</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">DIDs</div>
+      <div class="stat-value" id="didsCount">—</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Capabilities</div>
+      <div class="stat-value" id="capsCount">—</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Mean κ</div>
+      <div class="stat-value" id="meanCurvature">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Graph Area -->
+<div class="graph-area">
+  <svg class="graph" id="graph"></svg>
+  <div class="tooltip" id="tooltip">
+    <div class="did"></div>
+    <div class="metric"><span class="metric-label">Mass:</span><span class="metric-value mass"></span></div>
+    <div class="metric"><span class="metric-label">Curvature:</span><span class="metric-value curvature"></span></div>
+    <div class="metric"><span class="metric-label">Score:</span><span class="metric-value score"></span></div>
+    <div class="metric"><span class="metric-label">Diversity:</span><span class="metric-value diversity"></span></div>
+  </div>
+</div>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-section">
+    <div class="section-title">Controls</div>
+    <div class="controls">
+      <button class="btn" id="refreshBtn">
+        <span>↻</span> Refresh Now
+      </button>
+      <button class="btn danger" id="attackBtn">
+        <span>⚠</span> Launch Sybil Attack
+      </button>
+      <div class="attack-feedback" id="attackFeedback"></div>
+    </div>
+  </div>
+  <div class="sidebar-section" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <div class="section-title">Coherence Scoreboard</div>
+    <div class="scoreboard" id="scoreboard">
+      <div class="empty-state">Loading DIDs...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Configuration
+const NODE_URL = 'http://localhost:8000';
+const POLL_INTERVAL = 3000;
+let pollTimer = null;
+let graphData = { nodes: [], links: [] };
+let selectedDid = null;
+
+// D3 Setup
+const svg = d3.select('#graph');
+const width = window.innerWidth - 380;
+const height = window.innerHeight - 60;
+svg.attr('viewBox', [0, 0, width, height]);
+
+const simulation = d3.forceSimulation()
+  .force('link', d3.forceLink().id(d => d.id).distance(120))
+  .force('charge', d3.forceManyBody().strength(-300))
+  .force('center', d3.forceCenter(width / 2, height / 2))
+  .force('collision', d3.forceCollide().radius(d => d.radius + 10));
+
+let link = svg.append('g').selectAll('line');
+let node = svg.append('g').selectAll('g');
+
+// Utility functions
+function shortDid(did) {
+  if (!did || did.length < 20) return did || 'unknown';
+  return did.slice(0, 12) + '...' + did.slice(-4);
+}
+
+function curvatureColor(curvature) {
+  if (curvature > 0.15) return '#22c55e';
+  if (curvature > 0) return '#3b82f6';
+  return '#ef4444';
+}
+
+function massToRadius(mass) {
+  return Math.max(6, Math.min(20, 6 + mass * 1.5));
+}
+
+function scoreClass(score) {
+  if (score > 0.7) return 'high';
+  if (score > 0.3) return 'medium';
+  return 'low';
+}
+
+// Fetch functions
+async function fetchHealth() {
+  try {
+    const res = await fetch(`${NODE_URL}/network/health`);
+    if (!res.ok) throw new Error('Health endpoint failed');
+    const data = await res.json();
+
+    document.getElementById('dagSize').textContent = data.dag_size?.toLocaleString() || '0';
+    document.getElementById('didsCount').textContent = data.registered_dids?.toLocaleString() || '0';
+    document.getElementById('capsCount').textContent = data.active_capabilities?.toLocaleString() || '0';
+
+    const meanCurv = data.mean_network_curvature;
+    const curvEl = document.getElementById('meanCurvature');
+    if (typeof meanCurv === 'number') {
+      curvEl.textContent = meanCurv.toFixed(3);
+      curvEl.className = meanCurv > 0 ? 'stat-value positive' : 'stat-value negative';
+    } else {
+      curvEl.textContent = '—';
+      curvEl.className = 'stat-value';
+    }
+  } catch (err) {
+    console.error('Failed to fetch health:', err);
+  }
+}
+
+async function fetchIdentities() {
+  try {
+    const res = await fetch(`${NODE_URL}/identity`);
+    if (!res.ok) throw new Error('Identity endpoint failed');
+    const data = await res.json();
+
+    // Handle both array and object with dids property
+    let dids = [];
+    if (Array.isArray(data)) {
+      dids = data;
+    } else if (data.dids && Array.isArray(data.dids)) {
+      dids = data.dids;
+    } else if (data.identities && Array.isArray(data.identities)) {
+      dids = data.identities.map(i => i.did || i);
+    }
+
+    return dids;
+  } catch (err) {
+    console.error('Failed to fetch identities:', err);
+    return [];
+  }
+}
+
+async function fetchCoherence(did) {
+  try {
+    const res = await fetch(`${NODE_URL}/coherence/${encodeURIComponent(did)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    // Handle various response formats
+    const profile = data.profile || data;
+    return {
+      topological_mass: profile.topological_mass || 0,
+      mean_local_curvature: profile.mean_local_curvature || 0,
+      composite_score: profile.composite_score || 0,
+      relational_diversity: profile.relational_diversity || 0
+    };
+  } catch (err) {
+    console.error(`Failed to fetch coherence for ${did}:`, err);
+    return null;
+  }
+}
+
+async function fetchNeighbors(did) {
+  try {
+    const res = await fetch(`${NODE_URL}/coherence/neighbors/${encodeURIComponent(did)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.neighbors || data || [];
+  } catch (err) {
+    console.error(`Failed to fetch neighbors for ${did}:`, err);
+    return [];
+  }
+}
+
+async function fetchEdgeCurvature(didA, didB) {
+  try {
+    const res = await fetch(`${NODE_URL}/coherence/curvature/${encodeURIComponent(didA)}/${encodeURIComponent(didB)}`);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return data.curvature || 0;
+  } catch (err) {
+    return 0;
+  }
+}
+
+// Graph update
+async function updateGraph() {
+  const dids = await fetchIdentities();
+  if (dids.length === 0) {
+    renderScoreboard([]);
+    return;
+  }
+
+  // Fetch coherence for all DIDs
+  const profiles = await Promise.all(dids.map(async did => {
+    const coherence = await fetchCoherence(did);
+    return { did, coherence };
+  }));
+
+  // Build nodes
+  const nodes = profiles
+    .filter(p => p.coherence)
+    .map(p => ({
+      id: p.did,
+      mass: p.coherence.topological_mass,
+      curvature: p.coherence.mean_local_curvature,
+      score: p.coherence.composite_score,
+      diversity: p.coherence.relational_diversity,
+      radius: massToRadius(p.coherence.topological_mass)
+    }));
+
+  if (nodes.length === 0) {
+    renderScoreboard([]);
+    return;
+  }
+
+  // Fetch neighbors for all nodes to build edges
+  const edgeSet = new Set();
+  const links = [];
+
+  for (const n of nodes) {
+    const neighbors = await fetchNeighbors(n.id);
+    for (const neighbor of neighbors) {
+      const neighborNode = nodes.find(node => node.id === neighbor);
+      if (neighborNode) {
+        const key1 = `${n.id}-${neighbor}`;
+        const key2 = `${neighbor}-${n.id}`;
+        if (!edgeSet.has(key1) && !edgeSet.has(key2)) {
+          const curvature = await fetchEdgeCurvature(n.id, neighbor);
+          links.push({
+            source: n.id,
+            target: neighbor,
+            curvature
+          });
+          edgeSet.add(key1);
+        }
+      }
+    }
+  }
+
+  graphData = { nodes, links };
+  renderGraph();
+  renderScoreboard(nodes);
+}
+
+function renderGraph() {
+  const { nodes, links } = graphData;
+
+  // Update links
+  link = link.data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`)
+    .join('line')
+    .attr('class', d => {
+      const curv = d.curvature;
+      if (curv < -0.05) return 'link negative';
+      if (curv > 0.1) return 'link positive';
+      return 'link bridge';
+    })
+    .attr('stroke-width', d => {
+      const curv = d.curvature;
+      if (curv > 0.1) return 3;
+      if (curv > 0) return 2;
+      return 1;
+    });
+
+  // Update nodes
+  const nodeGroups = svg.select('g:last-child').selectAll('g')
+    .data(nodes, d => d.id)
+    .join('g')
+    .attr('class', 'node')
+    .call(drag(simulation))
+    .on('mouseenter', showTooltip)
+    .on('mouseleave', hideTooltip)
+    .on('click', (event, d) => {
+      selectedDid = d.id;
+      renderScoreboard(nodes);
+    });
+
+  nodeGroups.selectAll('circle').remove();
+  nodeGroups.append('circle')
+    .attr('r', d => d.radius)
+    .attr('fill', d => curvatureColor(d.curvature))
+    .attr('opacity', 0.8);
+
+  // Update simulation
+  simulation.nodes(nodes);
+  simulation.force('link').links(links);
+  simulation.alpha(0.3).restart();
+
+  simulation.on('tick', () => {
+    link
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+
+    nodeGroups.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+}
+
+function renderScoreboard(nodes) {
+  const scoreboard = document.getElementById('scoreboard');
+
+  if (nodes.length === 0) {
+    scoreboard.innerHTML = '<div class="empty-state">No DIDs found</div>';
+    return;
+  }
+
+  const sorted = [...nodes].sort((a, b) => b.score - a.score);
+
+  scoreboard.innerHTML = sorted.map((n, idx) => `
+    <div class="scoreboard-item ${selectedDid === n.id ? 'selected' : ''}" data-did="${n.id}">
+      <div class="did-short">
+        <span>${shortDid(n.id)}</span>
+        <span class="rank-badge">#${idx + 1}</span>
+      </div>
+      <div class="score-grid">
+        <div class="score-item">
+          <span class="score-label">Score</span>
+          <span class="score-value ${scoreClass(n.score)}">${n.score.toFixed(3)}</span>
+        </div>
+        <div class="score-item">
+          <span class="score-label">Mass</span>
+          <span class="score-value">${n.mass.toFixed(1)}</span>
+        </div>
+        <div class="score-item">
+          <span class="score-label">Curvature</span>
+          <span class="score-value ${n.curvature > 0 ? 'high' : 'low'}">${n.curvature.toFixed(3)}</span>
+        </div>
+        <div class="score-item">
+          <span class="score-label">Diversity</span>
+          <span class="score-value">${n.diversity.toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // Add click handlers
+  scoreboard.querySelectorAll('.scoreboard-item').forEach(item => {
+    item.addEventListener('click', () => {
+      selectedDid = item.dataset.did;
+      renderScoreboard(nodes);
+      highlightNode(selectedDid);
+    });
+  });
+}
+
+function highlightNode(did) {
+  svg.selectAll('.node circle').attr('opacity', d => d.id === did ? 1 : 0.3);
+  setTimeout(() => {
+    svg.selectAll('.node circle').attr('opacity', 0.8);
+  }, 1500);
+}
+
+function showTooltip(event, d) {
+  const tooltip = document.getElementById('tooltip');
+  tooltip.querySelector('.did').textContent = shortDid(d.id);
+  tooltip.querySelector('.mass').textContent = d.mass.toFixed(2);
+  tooltip.querySelector('.curvature').textContent = d.curvature.toFixed(3);
+  tooltip.querySelector('.score').textContent = d.score.toFixed(3);
+  tooltip.querySelector('.diversity').textContent = d.diversity.toFixed(2);
+
+  tooltip.style.left = `${event.pageX + 15}px`;
+  tooltip.style.top = `${event.pageY + 15}px`;
+  tooltip.style.opacity = 1;
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').style.opacity = 0;
+}
+
+function drag(simulation) {
+  function dragstarted(event) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    event.subject.fx = event.subject.x;
+    event.subject.fy = event.subject.y;
+  }
+
+  function dragged(event) {
+    event.subject.fx = event.x;
+    event.subject.fy = event.y;
+  }
+
+  function dragended(event) {
+    if (!event.active) simulation.alphaTarget(0);
+    event.subject.fx = null;
+    event.subject.fy = null;
+  }
+
+  return d3.drag()
+    .on('start', dragstarted)
+    .on('drag', dragged)
+    .on('end', dragended);
+}
+
+// Attack mode
+async function launchAttack() {
+  const btn = document.getElementById('attackBtn');
+  const feedback = document.getElementById('attackFeedback');
+
+  btn.disabled = true;
+  feedback.textContent = 'Registering Sybil agents...';
+  feedback.classList.add('show');
+
+  try {
+    // Register root
+    const rootRes = await fetch(`${NODE_URL}/identity/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_type: 'agi' })
+    });
+
+    if (!rootRes.ok) throw new Error('Failed to register root');
+    const rootData = await rootRes.json();
+    const rootDid = rootData.did;
+    const rootSk = rootData.signing_key_hex;
+
+    feedback.textContent = `Root registered: ${shortDid(rootDid)}`;
+
+    // Register 5 leaves
+    const leaves = [];
+    for (let i = 0; i < 5; i++) {
+      const leafRes = await fetch(`${NODE_URL}/identity/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_type: 'agi' })
+      });
+
+      if (!leafRes.ok) throw new Error(`Failed to register leaf ${i}`);
+      const leafData = await leafRes.json();
+      leaves.push(leafData.did);
+      feedback.textContent = `Registered ${i + 1}/5 leaves...`;
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Create introductions (star topology)
+    for (const leaf of leaves) {
+      await fetch(`${NODE_URL}/introduction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          introducer_did: rootDid,
+          introducer_sk_hex: rootSk,
+          introduced_did: leaf,
+          edge_name: 'sybil-link'
+        })
+      });
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    feedback.textContent = `Attack complete. Star topology created. Watch curvature degrade.`;
+
+    // Force immediate refresh
+    setTimeout(() => {
+      updateAll();
+      feedback.classList.remove('show');
+      btn.disabled = false;
+    }, 2000);
+  } catch (err) {
+    console.error('Attack failed:', err);
+    feedback.textContent = `Attack failed: ${err.message}`;
+    btn.disabled = false;
+  }
+}
+
+// Poll loop
+async function updateAll() {
+  await fetchHealth();
+  await updateGraph();
+}
+
+function startPolling() {
+  updateAll();
+  pollTimer = setInterval(updateAll, POLL_INTERVAL);
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+}
+
+// Event handlers
+document.getElementById('refreshBtn').addEventListener('click', updateAll);
+document.getElementById('attackBtn').addEventListener('click', launchAttack);
+
+// Window resize
+window.addEventListener('resize', () => {
+  const newWidth = window.innerWidth - 380;
+  const newHeight = window.innerHeight - 60;
+  svg.attr('viewBox', [0, 0, newWidth, newHeight]);
+  simulation.force('center', d3.forceCenter(newWidth / 2, newHeight / 2));
+  simulation.alpha(0.3).restart();
+});
+
+// Start
+startPolling();
+</script>
+
+</body>
+</html>

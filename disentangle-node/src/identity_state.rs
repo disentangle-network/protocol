@@ -6,10 +6,11 @@
 use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_identity::{
-    evaluate_proposal, AgentType, Capability, CapabilityId, CapabilitySubject, CoherenceProfile,
-    Constraint, ConstraintContext, DIDDocument, DelegationRecord, GovernanceProposal,
-    GovernanceVote, IdentityError, IdentityGraph, IntroductionContext, IntroductionTransaction,
-    PetnameDB, ProposalResult, ProposalType, RevocationScope, VoteChoice, DID,
+    evaluate_proposal, AgentType, AgreementStatus, AgreementTerms, Capability, CapabilityId,
+    CapabilitySubject, CoherenceProfile, Constraint, ConstraintContext, DIDDocument,
+    DelegationRecord, GovernanceProposal, GovernanceVote, IdentityError, IdentityGraph,
+    IntroductionContext, IntroductionTransaction, PetnameDB, ProposalResult, ProposalType,
+    RevocationScope, ServiceAgreement, VoteChoice, DID,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -28,6 +29,7 @@ struct SerializableState {
     first_seen: HashMap<String, u64>,
     proposals: Vec<GovernanceProposal>,
     votes: Vec<GovernanceVote>,
+    agreements: Vec<ServiceAgreement>,
 }
 
 pub struct IdentityStateManager {
@@ -41,6 +43,7 @@ pub struct IdentityStateManager {
     proposals: HashMap<Hash256, GovernanceProposal>,
     votes: Vec<GovernanceVote>,
     introduction_history: Vec<IntroductionTransaction>, // For persistence
+    agreements: HashMap<Hash256, ServiceAgreement>,
 }
 
 impl Default for IdentityStateManager {
@@ -62,6 +65,7 @@ impl IdentityStateManager {
             proposals: HashMap::new(),
             votes: Vec::new(),
             introduction_history: Vec::new(),
+            agreements: HashMap::new(),
         }
     }
 
@@ -578,6 +582,114 @@ impl IdentityStateManager {
         ))
     }
 
+    // Agreement Operations
+
+    /// Propose a new service agreement
+    pub fn propose_agreement(
+        &mut self,
+        provider_did: &str,
+        provider_sk: &SigningKey,
+        consumer_did: &str,
+        capability_id: Option<&Hash256>,
+        terms: AgreementTerms,
+    ) -> Result<Hash256, IdentityError> {
+        // Verify provider exists
+        if !self.did_registry.contains_key(provider_did) {
+            return Err(IdentityError::DIDNotFound(provider_did.to_string()));
+        }
+
+        // Verify consumer exists
+        if !self.did_registry.contains_key(consumer_did) {
+            return Err(IdentityError::DIDNotFound(consumer_did.to_string()));
+        }
+
+        // Sign the agreement proposal
+        use disentangle_crypto::sign;
+        let message = format!(
+            "AGREEMENT:{}:{}:{}",
+            provider_did, consumer_did, terms.description
+        );
+        let signature = sign(provider_sk, message.as_bytes());
+
+        let agreement = ServiceAgreement::new(
+            provider_did.to_string(),
+            consumer_did.to_string(),
+            capability_id.copied(),
+            terms,
+            self.current_depth,
+            signature.to_bytes().to_vec(),
+        );
+
+        let agreement_id = agreement.id;
+        self.agreements.insert(agreement_id, agreement);
+
+        Ok(agreement_id)
+    }
+
+    /// Accept a proposed agreement (consumer signature)
+    pub fn accept_agreement(
+        &mut self,
+        agreement_id: &Hash256,
+        consumer_sk: &SigningKey,
+    ) -> Result<(), IdentityError> {
+        let agreement = self
+            .agreements
+            .get_mut(agreement_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(agreement_id)))?;
+
+        if agreement.status != AgreementStatus::Proposed {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Agreement is not in Proposed state".to_string(),
+            ));
+        }
+
+        // Sign the acceptance
+        use disentangle_crypto::sign;
+        let message = format!("ACCEPT:{}", hex::encode(agreement_id));
+        let signature = sign(consumer_sk, message.as_bytes());
+
+        agreement.accept(signature.to_bytes().to_vec());
+
+        Ok(())
+    }
+
+    /// Complete an agreement with success status
+    pub fn complete_agreement(
+        &mut self,
+        agreement_id: &Hash256,
+        success: bool,
+        outcome_hash: Hash256,
+        _signer_sk: &SigningKey,
+    ) -> Result<(), IdentityError> {
+        let agreement = self
+            .agreements
+            .get_mut(agreement_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(agreement_id)))?;
+
+        if agreement.status != AgreementStatus::Active {
+            return Err(IdentityError::ConstraintNotSatisfied(
+                "Agreement is not in Active state".to_string(),
+            ));
+        }
+
+        agreement.complete(success, outcome_hash, self.current_depth);
+
+        Ok(())
+    }
+
+    /// Get an agreement by ID
+    pub fn get_agreement(&self, agreement_id: &Hash256) -> Option<&ServiceAgreement> {
+        self.agreements.get(agreement_id)
+    }
+
+    /// List all agreements involving a specific DID
+    pub fn list_agreements_for_did(&self, did: &str) -> Vec<&ServiceAgreement> {
+        self.agreements
+            .values()
+            .filter(|agreement| agreement.involves_did(did))
+            .collect()
+    }
+
     // Persistence Operations
 
     /// Save state to a JSON file
@@ -604,6 +716,7 @@ impl IdentityStateManager {
         let introductions = self.introduction_history.clone();
 
         let proposals: Vec<GovernanceProposal> = self.proposals.values().cloned().collect();
+        let agreements: Vec<ServiceAgreement> = self.agreements.values().cloned().collect();
 
         let state = SerializableState {
             did_registry_keys,
@@ -616,6 +729,7 @@ impl IdentityStateManager {
             first_seen: self.first_seen.clone(),
             proposals,
             votes: self.votes.clone(),
+            agreements,
         };
 
         let json = serde_json::to_string_pretty(&state)
@@ -688,6 +802,12 @@ impl IdentityStateManager {
             proposals.insert(proposal.id, proposal);
         }
 
+        // Reconstruct agreements
+        let mut agreements = HashMap::new();
+        for agreement in state.agreements {
+            agreements.insert(agreement.id, agreement);
+        }
+
         Ok(Self {
             did_registry,
             capability_store,
@@ -699,6 +819,7 @@ impl IdentityStateManager {
             proposals,
             votes: state.votes,
             introduction_history: state.introductions,
+            agreements,
         })
     }
 
@@ -1104,5 +1225,136 @@ mod tests {
             avg_honest,
             avg_sybil
         );
+    }
+
+    #[test]
+    fn test_propose_and_accept_agreement() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Compute 100 embeddings".to_string(),
+            deadline_depth: Some(1000),
+            success_criteria: vec!["All embeddings returned".to_string()],
+            max_invocations: Some(100),
+        };
+
+        // Propose agreement
+        let agreement_id = manager
+            .propose_agreement(&did_provider.0, &sk_provider, &did_consumer.0, None, terms)
+            .unwrap();
+
+        // Check it exists and is in Proposed state
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        assert_eq!(
+            agreement.status,
+            disentangle_identity::AgreementStatus::Proposed
+        );
+        assert!(agreement.consumer_signature.is_none());
+
+        // Accept agreement
+        manager
+            .accept_agreement(&agreement_id, &sk_consumer)
+            .unwrap();
+
+        // Check it's now Active
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        assert_eq!(
+            agreement.status,
+            disentangle_identity::AgreementStatus::Active
+        );
+        assert!(agreement.consumer_signature.is_some());
+    }
+
+    #[test]
+    fn test_complete_agreement_success() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Test service".to_string(),
+            deadline_depth: None,
+            success_criteria: vec![],
+            max_invocations: None,
+        };
+
+        let agreement_id = manager
+            .propose_agreement(&did_provider.0, &sk_provider, &did_consumer.0, None, terms)
+            .unwrap();
+
+        manager
+            .accept_agreement(&agreement_id, &sk_consumer)
+            .unwrap();
+
+        // Complete agreement successfully
+        let outcome_hash = [42u8; 32];
+        manager
+            .complete_agreement(&agreement_id, true, outcome_hash, &sk_provider)
+            .unwrap();
+
+        let agreement = manager.get_agreement(&agreement_id).unwrap();
+        match agreement.status {
+            disentangle_identity::AgreementStatus::Completed {
+                success,
+                outcome_hash: hash,
+            } => {
+                assert!(success);
+                assert_eq!(hash, outcome_hash);
+            }
+            _ => panic!("Expected Completed status"),
+        }
+        assert!(agreement.completed_depth.is_some());
+    }
+
+    #[test]
+    fn test_list_agreements_by_did() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, _sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+        let (did_other, _, _sk_other) = manager.register_did(AgentType::Human).unwrap();
+
+        let terms = disentangle_identity::AgreementTerms {
+            description: "Test".to_string(),
+            deadline_depth: None,
+            success_criteria: vec![],
+            max_invocations: None,
+        };
+
+        // Create two agreements involving provider
+        let agreement_id1 = manager
+            .propose_agreement(
+                &did_provider.0,
+                &sk_provider,
+                &did_consumer.0,
+                None,
+                terms.clone(),
+            )
+            .unwrap();
+
+        let agreement_id2 = manager
+            .propose_agreement(&did_provider.0, &sk_provider, &did_other.0, None, terms)
+            .unwrap();
+
+        // Provider should see both agreements
+        let provider_agreements = manager.list_agreements_for_did(&did_provider.0);
+        assert_eq!(provider_agreements.len(), 2);
+        let ids: Vec<_> = provider_agreements.iter().map(|a| a.id).collect();
+        assert!(ids.contains(&agreement_id1));
+        assert!(ids.contains(&agreement_id2));
+
+        // Consumer should see only one
+        let consumer_agreements = manager.list_agreements_for_did(&did_consumer.0);
+        assert_eq!(consumer_agreements.len(), 1);
+        assert_eq!(consumer_agreements[0].id, agreement_id1);
+
+        // Other should see only one
+        let other_agreements = manager.list_agreements_for_did(&did_other.0);
+        assert_eq!(other_agreements.len(), 1);
+        assert_eq!(other_agreements[0].id, agreement_id2);
     }
 }
