@@ -295,6 +295,133 @@ pub enum RevocationScope {
     All,
 }
 
+/// Pre-defined capability templates for common agent interactions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CapabilityTemplate {
+    /// Compute invocation capability
+    ComputeInvoke {
+        endpoint: String,
+        max_calls_per_epoch: u32,
+    },
+    /// Data read access
+    DataRead { scope: String, ttl_depth: u64 },
+    /// Data write access
+    DataWrite { scope: String, max_size_bytes: u64 },
+    /// Spending authorization
+    SpendAuthorize {
+        max_amount: u64,
+        rate_limit_per_epoch: u32,
+        allowed_recipients: Option<Vec<String>>,
+    },
+    /// Delegation proxy capability
+    DelegateProxy {
+        max_depth: u32,
+        allowed_subjects: Vec<String>,
+    },
+    /// Custom capability with arbitrary schema
+    Custom {
+        schema: String,
+        params: serde_json::Value,
+    },
+}
+
+impl CapabilityTemplate {
+    /// Get a list of all available templates
+    pub fn list_templates() -> Vec<String> {
+        vec![
+            "ComputeInvoke".to_string(),
+            "DataRead".to_string(),
+            "DataWrite".to_string(),
+            "SpendAuthorize".to_string(),
+            "DelegateProxy".to_string(),
+            "Custom".to_string(),
+        ]
+    }
+
+    /// Convert a template to a capability subject and constraints
+    pub fn to_capability_params(&self) -> (CapabilitySubject, Vec<Constraint>) {
+        match self {
+            Self::ComputeInvoke {
+                endpoint,
+                max_calls_per_epoch,
+            } => {
+                let subject = CapabilitySubject::Custom {
+                    type_uri: format!("compute://{}", endpoint),
+                    parameters: max_calls_per_epoch.to_le_bytes().to_vec(),
+                };
+                (subject, vec![])
+            }
+            Self::DataRead { scope, ttl_depth } => {
+                // Create a resource ID from the scope
+                let resource_id = disentangle_crypto::hash::sha3_256(scope.as_bytes());
+                let subject = CapabilitySubject::Access {
+                    resource_id,
+                    operations: vec![AccessOp::Read],
+                };
+                let constraint = Constraint::TemporalBound {
+                    not_before: 0,
+                    not_after: *ttl_depth,
+                };
+                (subject, vec![constraint])
+            }
+            Self::DataWrite {
+                scope,
+                max_size_bytes,
+            } => {
+                let params_bytes = max_size_bytes.to_le_bytes().to_vec();
+                let subject = CapabilitySubject::Custom {
+                    type_uri: format!("data:write:{}", scope),
+                    parameters: params_bytes,
+                };
+                (subject, vec![])
+            }
+            Self::SpendAuthorize {
+                max_amount,
+                rate_limit_per_epoch,
+                allowed_recipients,
+            } => {
+                let mut params = max_amount.to_le_bytes().to_vec();
+                params.extend_from_slice(&rate_limit_per_epoch.to_le_bytes());
+                if let Some(recipients) = allowed_recipients {
+                    for recipient in recipients {
+                        params.extend_from_slice(recipient.as_bytes());
+                    }
+                }
+                let subject = CapabilitySubject::Custom {
+                    type_uri: "spend:authorize".to_string(),
+                    parameters: params,
+                };
+                (subject, vec![])
+            }
+            Self::DelegateProxy {
+                max_depth,
+                allowed_subjects,
+            } => {
+                let subject = CapabilitySubject::Govern {
+                    scope: GovernanceScope::CapabilityPolicy,
+                    weight: 0, // Weight not used for proxy
+                };
+                let constraint = Constraint::DelegationDepth {
+                    max_depth: *max_depth,
+                };
+                let mut params = Vec::new();
+                for subj in allowed_subjects {
+                    params.extend_from_slice(subj.as_bytes());
+                }
+                (subject, vec![constraint])
+            }
+            Self::Custom { schema, params } => {
+                let params_bytes = serde_json::to_vec(params).unwrap_or_default();
+                let subject = CapabilitySubject::Custom {
+                    type_uri: schema.clone(),
+                    parameters: params_bytes,
+                };
+                (subject, vec![])
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

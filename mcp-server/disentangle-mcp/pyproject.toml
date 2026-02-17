@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "disentangle-mcp"
+version = "0.1.0"
+description = "MCP server for Disentangle Protocol - agent coordination surface"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp>=2.14.5",
+    "httpx>=0.28.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/disentangle_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
