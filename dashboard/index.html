@@ -19,10 +19,11 @@
 body{background:var(--bg);color:var(--text);font-family:var(--font-body);margin:0;overflow:hidden}
 
 /* Layout */
-.container{display:grid;grid-template-columns:1fr 380px;grid-template-rows:auto 1fr;height:100vh;gap:0}
+.container{display:grid;grid-template-columns:1fr 380px 320px;grid-template-rows:auto 1fr;height:100vh;gap:0}
 .header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid rgba(255,255,255,0.04);padding:1rem 1.5rem;display:flex;justify-content:space-between;align-items:center}
 .graph-area{grid-column:1;grid-row:2;position:relative;overflow:hidden;background:var(--bg)}
 .sidebar{grid-column:2;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow:hidden}
+.economy-panel{grid-column:3;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow-y:auto}
 
 /* Header */
 .header-left{display:flex;align-items:center;gap:1rem}
@@ -80,9 +81,34 @@ svg.graph{width:100%;height:100%}
 .attack-feedback{padding:0.65rem;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font-family:var(--font-mono);font-size:0.65rem;color:var(--negative);margin-top:0.5rem;display:none}
 .attack-feedback.show{display:block}
 
+/* Coordination Economy Panels */
+.economy-section{padding:1rem;border-bottom:1px solid rgba(255,255,255,0.04)}
+.economy-item{padding:0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--bg);margin-bottom:0.5rem;font-family:var(--font-mono);font-size:0.65rem}
+.progress-bar{height:6px;background:rgba(255,255,255,0.06);border-radius:3px;margin-top:0.35rem;overflow:hidden}
+.progress-fill{height:100%;border-radius:3px;transition:width 0.3s}
+.status-attracting{background:#3b82f6}
+.status-activated{background:#22c55e}
+.status-expired{background:#4a4d58}
+.intent-healthy{border-left:3px solid #22c55e}
+.intent-neutral{border-left:3px solid #f59e0b}
+.intent-unhealthy{border-left:3px solid #ef4444}
+.stack-bar{height:20px;display:flex;margin-top:0.35rem;border-radius:3px;overflow:hidden}
+.stack-segment{height:100%;display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:rgba(255,255,255,0.9)}
+.hull{fill:none;stroke-width:2;opacity:0.4}
+.hull-merge{stroke:#22c55e}
+.hull-split{stroke:#ef4444}
+.mini-table{font-size:0.6rem;margin-top:0.35rem}
+.mini-row{display:flex;justify-content:space-between;padding:0.15rem 0}
+.mini-label{color:var(--text-dim)}
+.mini-value{color:var(--text);font-weight:700}
+
 /* Responsive */
+@media(max-width:1600px){
+  .container{grid-template-columns:1fr 350px 280px}
+}
 @media(max-width:1200px){
   .container{grid-template-columns:1fr 320px}
+  .economy-panel{display:none}
   .header-stats{gap:1rem}
 }
 </style>
@@ -149,6 +175,40 @@ svg.graph{width:100%;height:100%}
   </div>
 </div>
 
+<!-- Coordination Economy Panel -->
+<div class="economy-panel">
+  <div class="economy-section">
+    <div class="section-title">Active Proposals</div>
+    <div id="proposalsContainer">
+      <div class="empty-state">No proposals</div>
+    </div>
+  </div>
+  <div class="economy-section">
+    <div class="section-title">SharedIntents</div>
+    <div id="intentsContainer">
+      <div class="empty-state">No intents</div>
+    </div>
+  </div>
+  <div class="economy-section">
+    <div class="section-title">Oracle Distributions</div>
+    <div id="distributionsContainer">
+      <div class="empty-state">No distributions</div>
+    </div>
+  </div>
+  <div class="economy-section">
+    <div class="section-title">CommonsPool</div>
+    <div id="poolContainer">
+      <div class="empty-state">Pool not initialized</div>
+    </div>
+  </div>
+  <div class="economy-section">
+    <div class="section-title">Neighborhoods</div>
+    <div id="neighborhoodsContainer">
+      <div class="empty-state">Computing...</div>
+    </div>
+  </div>
+</div>
+
 <script>
 // Configuration
 const NODE_URL = 'http://localhost:8000';
@@ -159,9 +219,12 @@ let selectedDid = null;
 
 // D3 Setup
 const svg = d3.select('#graph');
-const width = window.innerWidth - 380;
+const width = window.innerWidth - 700;
 const height = window.innerHeight - 60;
 svg.attr('viewBox', [0, 0, width, height]);
+
+let hullGroup = svg.append('g').attr('class', 'hulls');
+let neighborhoodsData = [];
 
 const simulation = d3.forceSimulation()
   .force('link', d3.forceLink().id(d => d.id).distance(120))
@@ -285,6 +348,66 @@ async function fetchEdgeCurvature(didA, didB) {
   }
 }
 
+async function fetchProposals() {
+  try {
+    const res = await fetch(`${NODE_URL}/proposal/list`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.proposals || data || [];
+  } catch (err) {
+    console.error('Failed to fetch proposals:', err);
+    return [];
+  }
+}
+
+async function fetchIntents() {
+  try {
+    const res = await fetch(`${NODE_URL}/intent/list`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.intents || data || [];
+  } catch (err) {
+    console.error('Failed to fetch intents:', err);
+    return [];
+  }
+}
+
+async function fetchNeighborhoods() {
+  try {
+    const res = await fetch(`${NODE_URL}/topology/neighborhoods`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.neighborhoods || data || [];
+  } catch (err) {
+    console.error('Failed to fetch neighborhoods:', err);
+    return [];
+  }
+}
+
+async function fetchDistributions() {
+  try {
+    const res = await fetch(`${NODE_URL}/oracle/distributions`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.distributions || data || [];
+  } catch (err) {
+    console.error('Failed to fetch distributions:', err);
+    return [];
+  }
+}
+
+async function fetchPool() {
+  try {
+    const res = await fetch(`${NODE_URL}/pool/demo`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.pool || data || null;
+  } catch (err) {
+    console.error('Failed to fetch pool:', err);
+    return null;
+  }
+}
+
 // Graph update
 async function updateGraph() {
   const dids = await fetchIdentities();
@@ -341,6 +464,10 @@ async function updateGraph() {
   }
 
   graphData = { nodes, links };
+
+  // Fetch neighborhoods and store for rendering
+  neighborhoodsData = await fetchNeighborhoods();
+
   renderGraph();
   renderScoreboard(nodes);
 }
@@ -396,7 +523,44 @@ function renderGraph() {
       .attr('y2', d => d.target.y);
 
     nodeGroups.attr('transform', d => `translate(${d.x},${d.y})`);
+
+    // Update hulls after node positions settle
+    renderNeighborhoodHulls();
   });
+}
+
+function renderNeighborhoodHulls() {
+  if (!neighborhoodsData || neighborhoodsData.length === 0) {
+    hullGroup.selectAll('path').remove();
+    return;
+  }
+
+  const { nodes } = graphData;
+
+  const hulls = hullGroup.selectAll('path')
+    .data(neighborhoodsData, d => d.id || d.cluster_hash);
+
+  hulls.exit().remove();
+
+  hulls.enter()
+    .append('path')
+    .merge(hulls)
+    .attr('class', d => {
+      const isMerge = d.boundary_type === 'merge';
+      const isSplit = d.boundary_type === 'split';
+      return `hull ${isMerge ? 'hull-merge' : ''} ${isSplit ? 'hull-split' : ''}`;
+    })
+    .attr('d', d => {
+      const members = d.members || d.dids || [];
+      const points = members
+        .map(did => nodes.find(n => n.id === did))
+        .filter(n => n && n.x !== undefined && n.y !== undefined)
+        .map(n => [n.x, n.y]);
+
+      if (points.length < 3) return null;
+
+      return d3.line().curve(d3.curveBasisClosed)(d3.polygonHull(points));
+    });
 }
 
 function renderScoreboard(nodes) {
@@ -564,10 +728,213 @@ async function launchAttack() {
   }
 }
 
+// Render economy panels
+function renderProposals(proposals) {
+  const container = document.getElementById('proposalsContainer');
+  if (proposals.length === 0) {
+    container.innerHTML = '<div class="empty-state">No proposals</div>';
+    return;
+  }
+
+  container.innerHTML = proposals.map(p => {
+    const progress = Math.min(100, (p.committed_mass / p.activation_mass) * 100);
+    const status = p.status === 'Attracting' ? 'attracting' :
+                   p.status.Activated ? 'activated' : 'expired';
+    const statusLabel = p.status === 'Attracting' ? 'Attracting' :
+                        p.status.Activated ? 'Activated' : 'Expired';
+
+    return `
+      <div class="economy-item">
+        <div style="display:flex;justify-content:space-between;margin-bottom:0.25rem">
+          <span style="font-weight:700">${p.description || 'Proposal'}</span>
+          <span style="color:var(--text-dim)">${statusLabel}</span>
+        </div>
+        <div style="font-size:0.6rem;color:var(--text-dim)">
+          ${p.joiners?.length || 0}/${p.min_participants} participants • ${p.committed_mass.toFixed(1)}/${p.activation_mass.toFixed(1)} mass
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill status-${status}" style="width:${progress}%"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderIntents(intents) {
+  const container = document.getElementById('intentsContainer');
+  if (intents.length === 0) {
+    container.innerHTML = '<div class="empty-state">No intents</div>';
+    return;
+  }
+
+  container.innerHTML = intents.map(i => {
+    const massDelta = (i.coherence_snapshot?.mass_delta || 0);
+    const curvDelta = (i.coherence_snapshot?.curvature_delta || 0);
+    const health = (massDelta > 0 && curvDelta > 0) ? 'healthy' :
+                   (massDelta < 0 || curvDelta < 0) ? 'unhealthy' : 'neutral';
+
+    return `
+      <div class="economy-item intent-${health}">
+        <div style="font-weight:700;margin-bottom:0.25rem">${i.description || 'Intent'}</div>
+        <div style="font-size:0.6rem">
+          <div class="mini-row">
+            <span class="mini-label">Participants:</span>
+            <span class="mini-value">${i.participants?.length || 0}</span>
+          </div>
+          <div class="mini-row">
+            <span class="mini-label">Mass Δ:</span>
+            <span class="mini-value" style="color:${massDelta > 0 ? 'var(--positive)' : massDelta < 0 ? 'var(--negative)' : 'var(--text-dim)'}">
+              ${massDelta > 0 ? '+' : ''}${massDelta.toFixed(2)}
+            </span>
+          </div>
+          <div class="mini-row">
+            <span class="mini-label">Curvature Δ:</span>
+            <span class="mini-value" style="color:${curvDelta > 0 ? 'var(--positive)' : curvDelta < 0 ? 'var(--negative)' : 'var(--text-dim)'}">
+              ${curvDelta > 0 ? '+' : ''}${curvDelta.toFixed(3)}
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderDistributions(distributions) {
+  const container = document.getElementById('distributionsContainer');
+  if (distributions.length === 0) {
+    container.innerHTML = '<div class="empty-state">No distributions</div>';
+    return;
+  }
+
+  container.innerHTML = distributions.slice(0, 3).map(d => {
+    const weights = d.weights || {};
+    const sorted = Object.entries(weights).sort((a, b) => b[1] - a[1]);
+    const colors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+    return `
+      <div class="economy-item">
+        <div style="font-weight:700;margin-bottom:0.25rem">Distribution ${shortDid(d.query_id || d.id || '')}</div>
+        <div style="font-size:0.6rem;color:var(--text-dim);margin-bottom:0.35rem">
+          ${sorted.length} recipients
+        </div>
+        <div class="stack-bar">
+          ${sorted.slice(0, 5).map(([did, weight], idx) => `
+            <div class="stack-segment" style="width:${weight * 100}%;background:${colors[idx % colors.length]}" title="${shortDid(did)}: ${(weight * 100).toFixed(1)}%"></div>
+          `).join('')}
+        </div>
+        <div class="mini-table">
+          ${sorted.slice(0, 3).map(([did, weight]) => `
+            <div class="mini-row">
+              <span class="mini-label">${shortDid(did)}</span>
+              <span class="mini-value">${(weight * 100).toFixed(1)}%</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderPool(pool) {
+  const container = document.getElementById('poolContainer');
+  if (!pool) {
+    container.innerHTML = '<div class="empty-state">Pool not initialized</div>';
+    return;
+  }
+
+  const recentClaims = (pool.claims || []).slice(-5);
+
+  container.innerHTML = `
+    <div class="economy-item">
+      <div class="mini-table">
+        <div class="mini-row">
+          <span class="mini-label">Balance:</span>
+          <span class="mini-value">${pool.balance?.toLocaleString() || 0}</span>
+        </div>
+        <div class="mini-row">
+          <span class="mini-label">Min Coherence:</span>
+          <span class="mini-value">${pool.min_coherence?.toFixed(3) || '0.000'}</span>
+        </div>
+        <div class="mini-row">
+          <span class="mini-label">Total Claims:</span>
+          <span class="mini-value">${pool.claims?.length || 0}</span>
+        </div>
+      </div>
+      ${recentClaims.length > 0 ? `
+        <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid rgba(255,255,255,0.04)">
+          <div style="font-size:0.6rem;color:var(--text-dim);margin-bottom:0.25rem">Recent Claims:</div>
+          ${recentClaims.map(c => `
+            <div class="mini-row">
+              <span class="mini-label">${shortDid(c.claimant_did)}</span>
+              <span class="mini-value">${c.amount}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderNeighborhoods(neighborhoods) {
+  const container = document.getElementById('neighborhoodsContainer');
+  if (neighborhoods.length === 0) {
+    container.innerHTML = '<div class="empty-state">No neighborhoods</div>';
+    return;
+  }
+
+  container.innerHTML = neighborhoods.map(n => {
+    const isMerge = n.boundary_type === 'merge';
+    const isSplit = n.boundary_type === 'split';
+    const borderColor = isMerge ? '#22c55e' : isSplit ? '#ef4444' : 'rgba(255,255,255,0.04)';
+
+    return `
+      <div class="economy-item" style="border-left:3px solid ${borderColor}">
+        <div style="font-weight:700;margin-bottom:0.25rem">
+          ${n.name || shortDid(n.id || n.cluster_hash || '')}
+          ${isMerge ? ' (merging)' : isSplit ? ' (splitting)' : ''}
+        </div>
+        <div class="mini-table">
+          <div class="mini-row">
+            <span class="mini-label">Members:</span>
+            <span class="mini-value">${(n.members || n.dids || []).length}</span>
+          </div>
+          <div class="mini-row">
+            <span class="mini-label">Total Mass:</span>
+            <span class="mini-value">${(n.total_mass || 0).toFixed(1)}</span>
+          </div>
+          <div class="mini-row">
+            <span class="mini-label">Mean κ:</span>
+            <span class="mini-value" style="color:${(n.mean_curvature || 0) > 0 ? 'var(--positive)' : 'var(--negative)'}">
+              ${(n.mean_curvature || 0).toFixed(3)}
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function updateEconomyPanels() {
+  const [proposals, intents, distributions, pool, neighborhoods] = await Promise.all([
+    fetchProposals(),
+    fetchIntents(),
+    fetchDistributions(),
+    fetchPool(),
+    fetchNeighborhoods()
+  ]);
+
+  renderProposals(proposals);
+  renderIntents(intents);
+  renderDistributions(distributions);
+  renderPool(pool);
+  renderNeighborhoods(neighborhoods);
+}
+
 // Poll loop
 async function updateAll() {
   await fetchHealth();
   await updateGraph();
+  await updateEconomyPanels();
 }
 
 function startPolling() {
@@ -583,9 +950,75 @@ function stopPolling() {
 document.getElementById('refreshBtn').addEventListener('click', updateAll);
 document.getElementById('attackBtn').addEventListener('click', launchAttack);
 
+// SSE Event Stream
+let eventSource = null;
+
+function setupEventStream() {
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  eventSource = new EventSource(`${NODE_URL}/watch`);
+
+  eventSource.addEventListener('ProposalCreated', (e) => {
+    console.log('ProposalCreated:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('ProposalJoined', (e) => {
+    console.log('ProposalJoined:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('ProposalActivated', (e) => {
+    console.log('ProposalActivated:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('IntentCreated', (e) => {
+    console.log('IntentCreated:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('IntentJoined', (e) => {
+    console.log('IntentJoined:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('IntentArchived', (e) => {
+    console.log('IntentArchived:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('NeighborhoodMerge', (e) => {
+    console.log('NeighborhoodMerge:', e.data);
+    updateGraph();
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('NeighborhoodSplit', (e) => {
+    console.log('NeighborhoodSplit:', e.data);
+    updateGraph();
+    updateEconomyPanels();
+  });
+
+  eventSource.addEventListener('DistributionComputed', (e) => {
+    console.log('DistributionComputed:', e.data);
+    updateEconomyPanels();
+  });
+
+  eventSource.onerror = (err) => {
+    console.error('EventSource error:', err);
+    // Reconnect after 5s
+    setTimeout(() => {
+      setupEventStream();
+    }, 5000);
+  };
+}
+
 // Window resize
 window.addEventListener('resize', () => {
-  const newWidth = window.innerWidth - 380;
+  const newWidth = window.innerWidth - 700;
   const newHeight = window.innerHeight - 60;
   svg.attr('viewBox', [0, 0, newWidth, newHeight]);
   simulation.force('center', d3.forceCenter(newWidth / 2, newHeight / 2));
@@ -594,6 +1027,7 @@ window.addEventListener('resize', () => {
 
 // Start
 startPolling();
+setupEventStream();
 </script>
 
 </body>

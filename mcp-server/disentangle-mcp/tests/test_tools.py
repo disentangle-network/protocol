@@ -2,7 +2,7 @@
 
 
 def test_all_tools_registered():
-    """Verify all 15 tools are registered."""
+    """Verify all 28 tools are registered."""
     from disentangle_mcp.server import mcp
 
     tools = mcp._tool_manager._tools
@@ -13,13 +13,18 @@ def test_all_tools_registered():
         "introduce",
         "propose_agreement", "accept_agreement", "complete_agreement",
         "network_health", "node_status",
+        "create_proposal", "join_proposal", "list_proposals",
+        "create_intent", "join_intent", "archive_intent", "intent_coherence", "list_intents",
+        "query_oracle", "get_distribution",
+        "neighborhoods",
+        "pool_status", "pool_claim",
     ]
 
     tool_names = list(tools.keys())
     for name in expected:
         assert name in tool_names, f"Missing tool: {name}"
 
-    assert len(tool_names) == 15, f"Expected 15 tools, got {len(tool_names)}"
+    assert len(tool_names) == 28, f"Expected 28 tools, got {len(tool_names)}"
 
 
 def test_tool_descriptions():
@@ -94,3 +99,56 @@ def test_social_graph_tools_present():
     tool_names = set(mcp._tool_manager._tools.keys())
 
     assert "introduce" in tool_names
+
+
+def test_proposal_tools_present():
+    """Check proposal coordination tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "create_proposal" in tool_names
+    assert "join_proposal" in tool_names
+    assert "list_proposals" in tool_names
+
+
+def test_intent_tools_present():
+    """Check SharedIntent collaboration tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "create_intent" in tool_names
+    assert "join_intent" in tool_names
+    assert "archive_intent" in tool_names
+    assert "intent_coherence" in tool_names
+    assert "list_intents" in tool_names
+
+
+def test_oracle_tools_present():
+    """Check CoherenceOracle tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "query_oracle" in tool_names
+    assert "get_distribution" in tool_names
+
+
+def test_topology_tools_present():
+    """Check topology neighborhood tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "neighborhoods" in tool_names
+
+
+def test_pool_tools_present():
+    """Check CommonsPool tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "pool_status" in tool_names
+    assert "pool_claim" in tool_names

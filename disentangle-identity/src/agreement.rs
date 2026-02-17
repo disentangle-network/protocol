@@ -1,4 +1,4 @@
-//! Service Agreement Types
+//! Settlement Agreement Types
 //!
 //! Bilateral commitments with measurable completion for agent coordination.
 
@@ -36,9 +36,40 @@ pub struct AgreementTerms {
     pub max_invocations: Option<u32>,
 }
 
-/// A bilateral service agreement between two agents
+/// Coherence effect of a settlement (topological mass impact)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CoherenceEffect {
+    /// No topological mass change from this interaction
+    None,
+    /// Coherence change derived from SharedIntent participation (set by protocol, not user)
+    Derived { intent_id: Hash256 },
+}
+
+/// Resource type for receipts
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceAgreement {
+pub enum ResourceType {
+    Compute,
+    Storage,
+    Bandwidth,
+    ApiCall,
+    Custom(String),
+}
+
+/// Receipt for resource consumption
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceReceipt {
+    pub id: Hash256,
+    pub payer_did: String,
+    pub resource_type: ResourceType,
+    pub amount: u64,
+    pub settlement_id: Option<Hash256>,
+    pub depth: u64,
+    pub timestamp: u64,
+}
+
+/// A bilateral settlement agreement between two agents
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementAgreement {
     /// Unique identifier for the agreement
     pub id: Hash256,
     /// Provider DID (the agent providing the service)
@@ -51,6 +82,8 @@ pub struct ServiceAgreement {
     pub terms: AgreementTerms,
     /// Current status
     pub status: AgreementStatus,
+    /// Coherence effect of this settlement
+    pub coherence_effect: CoherenceEffect,
     /// DAG depth at which the agreement was created
     pub created_depth: u64,
     /// DAG depth at which the agreement was completed (if applicable)
@@ -61,7 +94,7 @@ pub struct ServiceAgreement {
     pub consumer_signature: Option<Vec<u8>>,
 }
 
-impl ServiceAgreement {
+impl SettlementAgreement {
     /// Create a new proposed agreement
     pub fn new(
         provider_did: String,
@@ -86,6 +119,7 @@ impl ServiceAgreement {
             capability_id,
             terms,
             status: AgreementStatus::Proposed,
+            coherence_effect: CoherenceEffect::None,
             created_depth,
             completed_depth: None,
             provider_signature,
@@ -166,7 +200,7 @@ mod tests {
             max_invocations: Some(100),
         };
 
-        let agreement = ServiceAgreement::new(
+        let agreement = SettlementAgreement::new(
             "did:disentangle:provider".to_string(),
             "did:disentangle:consumer".to_string(),
             None,
@@ -189,7 +223,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = ServiceAgreement::new(
+        let mut agreement = SettlementAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -213,7 +247,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = ServiceAgreement::new(
+        let mut agreement = SettlementAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -249,7 +283,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = ServiceAgreement::new(
+        let mut agreement = SettlementAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -279,7 +313,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let agreement = ServiceAgreement::new(
+        let agreement = SettlementAgreement::new(
             "did:provider".to_string(),
             "did:consumer".to_string(),
             None,
@@ -302,7 +336,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let agreement1 = ServiceAgreement::new(
+        let agreement1 = SettlementAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -311,7 +345,7 @@ mod tests {
             vec![1, 2, 3],
         );
 
-        let agreement2 = ServiceAgreement::new(
+        let agreement2 = SettlementAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
