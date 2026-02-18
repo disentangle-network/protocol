@@ -2198,7 +2198,7 @@ mod tests {
         let mut manager = IdentityStateManager::new();
 
         let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
-        let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
+        let (did_consumer, _, _sk_consumer) = manager.register_did(AgentType::Human).unwrap();
         let (did_other, _, _sk_other) = manager.register_did(AgentType::Human).unwrap();
 
         let terms = disentangle_identity::AgreementTerms {
