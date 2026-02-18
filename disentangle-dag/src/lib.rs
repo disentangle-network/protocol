@@ -517,7 +517,7 @@ mod tests {
     fn make_test_tx(nonce_seed: u64, parents: Vec<NodeId>) -> Transaction {
         let (sk, pk) = generate_keypair();
         let history_root = [nonce_seed as u8; 32];
-        let parent_hashes: Vec<Hash256> = parents.iter().copied().collect();
+        let parent_hashes: Vec<Hash256> = parents.to_vec();
         let simhash = SimHash::from_structural(&parent_hashes, &history_root);
         let nullifier = Nullifier::compute(&[0u8; 32], Epoch(0), &nonce_seed.to_le_bytes());
         let mut tx = Transaction {
@@ -1366,7 +1366,7 @@ mod tests {
         for curv in [-SCALE, -SCALE / 2, 0, SCALE / 4, SCALE / 2, SCALE] {
             let w = dag.curvature_weight_with_alpha(curv, ALPHA_MAX);
             assert!(
-                w >= MIN_CURVATURE_WEIGHT && w <= SCALE,
+                (MIN_CURVATURE_WEIGHT..=SCALE).contains(&w),
                 "Weight should always be in range [MIN_CURVATURE_WEIGHT, SCALE]"
             );
         }
