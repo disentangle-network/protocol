@@ -187,11 +187,7 @@ mod tests {
         let mut sender = PqEncryptedStream::new(&send_key, &recv_key);
         let mut receiver = PqEncryptedStream::new(&recv_key, &send_key);
 
-        let messages: [&[u8]; 3] = [
-            b"Message 1",
-            b"Message 2",
-            b"Message 3",
-        ];
+        let messages: [&[u8]; 3] = [b"Message 1", b"Message 2", b"Message 3"];
 
         for (i, msg) in messages.iter().enumerate() {
             let ciphertext = sender.encrypt_message(msg).unwrap();
