@@ -44,6 +44,42 @@ def get_neighbors(did: str) -> dict:
     r = httpx.get(f"{NODE_URL}/coherence/neighbors/{did}")
     return r.json()
 
+
+# --- Excitability Gradient Tools ---
+
+@mcp.tool()
+def curvature_gradient(did_a: str, did_b: str, window: int = 100) -> dict:
+    """Get curvature derivative (rate of coherence change) for a specific edge.
+    Measures how quickly curvature is changing over the given DAG depth window.
+    Positive gradient = strengthening relationship. Negative = weakening."""
+    r = httpx.get(
+        f"{NODE_URL}/coherence/gradient/{did_a}/{did_b}",
+        params={"window": window},
+    )
+    return r.json()
+
+@mcp.tool()
+def excitability(did: str, window: int = 100) -> dict:
+    """Get excitability profile for an agent (aggregated gradient across all edges).
+    High excitability means the agent's coherence is actively changing --
+    either forming new relationships or strengthening existing ones."""
+    r = httpx.get(
+        f"{NODE_URL}/coherence/excitability/{did}",
+        params={"window": window},
+    )
+    return r.json()
+
+@mcp.tool()
+def gradient_map(top_n: int = 20, window: int = 100) -> dict:
+    """Get network-level coherence gradient map showing where coherence is forming.
+    Returns the top_n edges with the highest absolute gradient, revealing
+    the most active regions of the identity graph."""
+    r = httpx.get(
+        f"{NODE_URL}/coherence/gradient/map",
+        params={"top_n": top_n, "window": window},
+    )
+    return r.json()
+
 # --- Capability Tools ---
 
 @mcp.tool()
@@ -349,3 +385,34 @@ def pool_claim(pool_id: str, distribution_id: str) -> dict:
     payload = {"pool_id": pool_id, "distribution_id": distribution_id}
     r = httpx.post(f"{NODE_URL}/pool/claim", json=payload)
     return r.json()
+
+@mcp.tool()
+def create_pool(name: str, description: str | None = None) -> dict:
+    """Create a new commons pool for topology-weighted resource distribution.
+    Pools receive external deposits and distribute to agents proportional
+    to their structural contribution as computed by the CoherenceOracle."""
+    payload = {"name": name}
+    if description is not None:
+        payload["description"] = description
+    r = httpx.post(f"{NODE_URL}/pool/create", json=payload)
+    return r.json()
+
+@mcp.tool()
+def pool_deposit(pool_id: str, amount: float, source: str | None = None) -> dict:
+    """Deposit resources into a commons pool. The pool accumulates deposits
+    until a distribution is triggered via the CoherenceOracle."""
+    payload = {"pool_id": pool_id, "amount": amount}
+    if source is not None:
+        payload["source"] = source
+    r = httpx.post(f"{NODE_URL}/pool/deposit", json=payload)
+    return r.json()
+
+@mcp.tool()
+def pool_distribute(pool_id: str, distribution_id: str) -> dict:
+    """Trigger distribution from a pool using oracle results. Links a
+    DistributionRoot to the pool and makes allocations claimable by
+    agents included in the distribution."""
+    payload = {"pool_id": pool_id, "distribution_id": distribution_id}
+    r = httpx.post(f"{NODE_URL}/pool/distribute", json=payload)
+    return r.json()
+

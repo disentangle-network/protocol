@@ -2,13 +2,14 @@
 
 
 def test_all_tools_registered():
-    """Verify all 28 tools are registered."""
+    """Verify all 34 tools are registered."""
     from disentangle_mcp.server import mcp
 
     tools = mcp._tool_manager._tools
     expected = [
         "register_identity", "lookup_identity",
         "check_coherence", "check_curvature", "get_neighbors",
+        "curvature_gradient", "excitability", "gradient_map",
         "create_capability", "delegate_capability", "invoke_capability", "list_capabilities",
         "introduce",
         "propose_agreement", "accept_agreement", "complete_agreement",
@@ -17,14 +18,14 @@ def test_all_tools_registered():
         "create_intent", "join_intent", "archive_intent", "intent_coherence", "list_intents",
         "query_oracle", "get_distribution",
         "neighborhoods",
-        "pool_status", "pool_claim",
+        "pool_status", "pool_claim", "create_pool", "pool_deposit", "pool_distribute",
     ]
 
     tool_names = list(tools.keys())
     for name in expected:
         assert name in tool_names, f"Missing tool: {name}"
 
-    assert len(tool_names) == 28, f"Expected 28 tools, got {len(tool_names)}"
+    assert len(tool_names) == 34, f"Expected 34 tools, got {len(tool_names)}"
 
 
 def test_tool_descriptions():
@@ -57,6 +58,17 @@ def test_coherence_tools_present():
     assert "check_coherence" in tool_names
     assert "check_curvature" in tool_names
     assert "get_neighbors" in tool_names
+
+
+def test_gradient_tools_present():
+    """Check excitability gradient tools."""
+    from disentangle_mcp.server import mcp
+
+    tool_names = set(mcp._tool_manager._tools.keys())
+
+    assert "curvature_gradient" in tool_names
+    assert "excitability" in tool_names
+    assert "gradient_map" in tool_names
 
 
 def test_capability_tools_present():
@@ -152,3 +164,6 @@ def test_pool_tools_present():
 
     assert "pool_status" in tool_names
     assert "pool_claim" in tool_names
+    assert "create_pool" in tool_names
+    assert "pool_deposit" in tool_names
+    assert "pool_distribute" in tool_names
