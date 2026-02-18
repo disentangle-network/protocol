@@ -30,7 +30,7 @@ fn make_dag_tx(
 ) -> Transaction {
     let (sk, pk) = keypair;
     let history_root = sha3_256(format!("history:{}", name).as_bytes());
-    let parent_hashes: Vec<Hash256> = parents.to_vec();
+    let parent_hashes: Vec<Hash256> = parents.iter().cloned().collect();
     let simhash = SimHash::from_structural(&parent_hashes, &history_root);
     let nullifier = Nullifier::compute(
         &sha3_256(format!("secret:{}", name).as_bytes()),

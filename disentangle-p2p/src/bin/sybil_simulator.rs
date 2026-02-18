@@ -6,7 +6,7 @@
 //! 3. Generating transactions from both groups
 //! 4. Comparing coherence scores to show honest >> sybil
 //!
-//! Demonstrates that topological curvature detects Sybil clusters without requiring tokens.
+//! This is the killer demo that shows TOPOLOGY DETECTS SYBILS -- NO TOKEN NEEDED
 
 use clap::Parser;
 use reqwest::blocking::Client;
@@ -292,7 +292,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Ratio: {:.1}x", ratio);
     }
     println!();
-    println!("Topological curvature successfully discriminates Sybil clusters.");
+    println!("✓ TOPOLOGY DETECTS SYBILS -- NO TOKEN NEEDED");
 
     Ok(())
 }

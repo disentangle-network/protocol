@@ -1,11 +1,12 @@
 //! Settlement Agreement Types
 //!
 //! Bilateral commitments with measurable completion for agent coordination.
+//! Settlement generates zero coherence delta.
 
 use disentangle_crypto::hash::Hash256;
 use serde::{Deserialize, Serialize};
 
-/// Status of a service agreement
+/// Status of a settlement agreement
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AgreementStatus {
     /// Proposed by provider, awaiting consumer acceptance
@@ -23,6 +24,37 @@ pub enum AgreementStatus {
     Disputed,
 }
 
+/// Coherence effect of an agreement
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CoherenceEffect {
+    /// No topological mass change from this interaction
+    None,
+    /// Coherence change derived from SharedIntent participation (set by protocol, not user)
+    Derived { intent_id: Hash256 },
+}
+
+/// Resource type for thermodynamic grounding
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ResourceType {
+    Compute,
+    Storage,
+    Bandwidth,
+    ApiCall,
+    Custom(String),
+}
+
+/// Resource receipt for thermodynamic grounding
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceReceipt {
+    pub id: Hash256,
+    pub payer_did: String,
+    pub resource_type: ResourceType,
+    pub amount: u64,
+    pub settlement_id: Option<Hash256>,
+    pub depth: u64,
+    pub timestamp: u64,
+}
+
 /// Terms of a service agreement
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgreementTerms {
@@ -34,37 +66,6 @@ pub struct AgreementTerms {
     pub success_criteria: Vec<String>,
     /// Optional maximum number of invocations
     pub max_invocations: Option<u32>,
-}
-
-/// Coherence effect of a settlement (topological mass impact)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum CoherenceEffect {
-    /// No topological mass change from this interaction
-    None,
-    /// Coherence change derived from SharedIntent participation (set by protocol, not user)
-    Derived { intent_id: Hash256 },
-}
-
-/// Resource type for receipts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ResourceType {
-    Compute,
-    Storage,
-    Bandwidth,
-    ApiCall,
-    Custom(String),
-}
-
-/// Receipt for resource consumption
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceReceipt {
-    pub id: Hash256,
-    pub payer_did: String,
-    pub resource_type: ResourceType,
-    pub amount: u64,
-    pub settlement_id: Option<Hash256>,
-    pub depth: u64,
-    pub timestamp: u64,
 }
 
 /// A bilateral settlement agreement between two agents
@@ -82,8 +83,6 @@ pub struct SettlementAgreement {
     pub terms: AgreementTerms,
     /// Current status
     pub status: AgreementStatus,
-    /// Coherence effect of this settlement
-    pub coherence_effect: CoherenceEffect,
     /// DAG depth at which the agreement was created
     pub created_depth: u64,
     /// DAG depth at which the agreement was completed (if applicable)
@@ -92,9 +91,14 @@ pub struct SettlementAgreement {
     pub provider_signature: Vec<u8>,
     /// Consumer's signature (added at acceptance time)
     pub consumer_signature: Option<Vec<u8>>,
+    /// Settlement generates zero coherence delta (protocol-enforced)
+    pub coherence_effect: CoherenceEffect,
 }
 
-impl SettlementAgreement {
+/// Backwards compatibility alias
+pub type ServiceAgreement = SettlementAgreement;
+
+impl ServiceAgreement {
     /// Create a new proposed agreement
     pub fn new(
         provider_did: String,
@@ -119,11 +123,11 @@ impl SettlementAgreement {
             capability_id,
             terms,
             status: AgreementStatus::Proposed,
-            coherence_effect: CoherenceEffect::None,
             created_depth,
             completed_depth: None,
             provider_signature,
             consumer_signature: None,
+            coherence_effect: CoherenceEffect::None, // Default: settlements generate no coherence
         }
     }
 
@@ -200,7 +204,7 @@ mod tests {
             max_invocations: Some(100),
         };
 
-        let agreement = SettlementAgreement::new(
+        let agreement = ServiceAgreement::new(
             "did:disentangle:provider".to_string(),
             "did:disentangle:consumer".to_string(),
             None,
@@ -223,7 +227,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = SettlementAgreement::new(
+        let mut agreement = ServiceAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -247,7 +251,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = SettlementAgreement::new(
+        let mut agreement = ServiceAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -283,7 +287,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let mut agreement = SettlementAgreement::new(
+        let mut agreement = ServiceAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -313,7 +317,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let agreement = SettlementAgreement::new(
+        let agreement = ServiceAgreement::new(
             "did:provider".to_string(),
             "did:consumer".to_string(),
             None,
@@ -336,7 +340,7 @@ mod tests {
             max_invocations: None,
         };
 
-        let agreement1 = SettlementAgreement::new(
+        let agreement1 = ServiceAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,
@@ -345,7 +349,7 @@ mod tests {
             vec![1, 2, 3],
         );
 
-        let agreement2 = SettlementAgreement::new(
+        let agreement2 = ServiceAgreement::new(
             "did:a".to_string(),
             "did:b".to_string(),
             None,

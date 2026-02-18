@@ -363,7 +363,7 @@ mod tests {
     fn make_test_tx(depth_seed: u64, parents: Vec<NodeId>, reputation: u64) -> Transaction {
         let (sk, pk) = generate_keypair();
         let history_root = [depth_seed as u8; 32];
-        let parent_hashes: Vec<Hash256> = parents.to_vec();
+        let parent_hashes: Vec<Hash256> = parents.iter().copied().collect();
         let simhash = SimHash::from_structural(&parent_hashes, &history_root);
         let nullifier =
             Nullifier::compute(&[depth_seed as u8; 32], Epoch(0), &depth_seed.to_le_bytes());

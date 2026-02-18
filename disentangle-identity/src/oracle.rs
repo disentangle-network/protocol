@@ -48,8 +48,10 @@ pub struct AgentScore {
     pub did: String,
     pub mass_delta: f64,
     pub curvature_delta: f64,
+    /// Rate of curvature change (the dopaminergic signal)
+    pub curvature_derivative: f64,
     pub diversity: u32, // distinct collaborators in region
-    pub composite: f64, // mass_delta * max(curvature_delta, 0) * diversity
+    pub composite: f64, // max(mass_delta,0) * max(curvature_derivative,0) * diversity
 }
 
 impl OracleQuery {
@@ -154,14 +156,18 @@ impl DistributionRoot {
 }
 
 impl AgentScore {
-    /// Compute composite score from deltas and diversity
-    /// Score = max(mass_delta, 0) * max(curvature_delta, 0) * diversity
+    /// Compute composite score from deltas, derivative, and diversity
+    /// Score = max(mass_delta, 0) * max(curvature_derivative, 0) * diversity
+    ///
+    /// The key change: composite uses `curvature_derivative` not `curvature_delta`.
+    /// This means the oracle rewards agents who are ACTIVELY CREATING coherence
+    /// (high derivative) over agents sitting in already-coherent neighborhoods (high level).
     pub fn compute_composite(&mut self) {
         let mass_component = self.mass_delta.max(0.0);
-        let curvature_component = self.curvature_delta.max(0.0);
+        let derivative_component = self.curvature_derivative.max(0.0);
         let diversity_component = self.diversity as f64;
 
-        self.composite = mass_component * curvature_component * diversity_component;
+        self.composite = mass_component * derivative_component * diversity_component;
     }
 }
 
@@ -183,6 +189,7 @@ mod tests {
             did: "did:disentangle:alice".to_string(),
             mass_delta: 10.0,
             curvature_delta: 0.5,
+            curvature_derivative: 0.5,
             diversity: 3,
             composite: 0.0,
         };
@@ -199,6 +206,7 @@ mod tests {
             did: "did:disentangle:sybil".to_string(),
             mass_delta: -5.0,
             curvature_delta: -0.3,
+            curvature_derivative: -0.2,
             diversity: 5,
             composite: 0.0,
         };
@@ -219,6 +227,7 @@ mod tests {
             did: "did:alice".to_string(),
             mass_delta: 10.0,
             curvature_delta: 1.0,
+            curvature_derivative: 1.0,
             diversity: 2,
             composite: 0.0,
         };
@@ -228,6 +237,7 @@ mod tests {
             did: "did:bob".to_string(),
             mass_delta: 5.0,
             curvature_delta: 1.0,
+            curvature_derivative: 1.0,
             diversity: 6,
             composite: 0.0,
         };
@@ -258,6 +268,7 @@ mod tests {
             did: "did:alice".to_string(),
             mass_delta: -10.0,
             curvature_delta: 0.5,
+            curvature_derivative: 0.5,
             diversity: 2,
             composite: 0.0,
         };
@@ -267,10 +278,11 @@ mod tests {
             did: "did:bob".to_string(),
             mass_delta: 5.0,
             curvature_delta: -0.3,
+            curvature_derivative: -0.3,
             diversity: 3,
             composite: 0.0,
         };
-        score2.compute_composite(); // 0 (negative curvature)
+        score2.compute_composite(); // 0 (negative curvature derivative)
 
         scores.insert("did:alice".to_string(), score1);
         scores.insert("did:bob".to_string(), score2);

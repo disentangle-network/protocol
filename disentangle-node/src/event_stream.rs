@@ -101,6 +101,19 @@ pub enum NodeEvent {
         recipient_count: usize,
         merkle_root: String,
     },
+    // Excitability gradient events
+    CoherenceGradientSpike {
+        did_a: String,
+        did_b: String,
+        derivative: f64,
+        threshold: f64,
+    },
+    CoherenceGradientCollapse {
+        did_a: String,
+        did_b: String,
+        derivative: f64,
+        threshold: f64,
+    },
 }
 
 /// Event bus for broadcasting node events to subscribers
