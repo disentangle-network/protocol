@@ -12,18 +12,19 @@
 :root{
   --bg:#0a0b0f;--bg2:#12141c;--bg3:#1a1d2a;
   --text:#e8e6e3;--text-dim:#8b8d95;--text-faint:#4a4d58;
-  --accent:#3b82f6;--positive:#22c55e;--negative:#ef4444;
+  --accent:#3b82f6;--positive:#22c55e;--negative:#ef4444;--warning:#f59e0b;
   --font-mono:'JetBrains Mono',monospace;
   --font-body:'DM Sans',sans-serif;
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font-body);margin:0;overflow:hidden}
 
-/* Layout */
-.container{display:grid;grid-template-columns:1fr 380px 320px;grid-template-rows:auto 1fr;height:100vh;gap:0}
+/* Layout — 4-column: gradient-panel | graph | sidebar | economy */
+.container{display:grid;grid-template-columns:280px 1fr 380px 320px;grid-template-rows:auto 1fr;height:100vh;gap:0}
 .header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid rgba(255,255,255,0.04);padding:1rem 1.5rem;display:flex;justify-content:space-between;align-items:center}
-.graph-area{grid-column:1;grid-row:2;position:relative;overflow:hidden;background:var(--bg)}
-.sidebar{grid-column:2;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow:hidden}
-.economy-panel{grid-column:3;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow-y:auto}
+.gradient-panel{grid-column:1;grid-row:2;background:var(--bg2);border-right:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow-y:auto}
+.graph-area{grid-column:2;grid-row:2;position:relative;overflow:hidden;background:var(--bg)}
+.sidebar{grid-column:3;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow:hidden}
+.economy-panel{grid-column:4;grid-row:2;background:var(--bg2);border-left:1px solid rgba(255,255,255,0.04);display:flex;flex-direction:column;overflow-y:auto}
 
 /* Header */
 .header-left{display:flex;align-items:center;gap:1rem}
@@ -42,10 +43,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);margin:
 svg.graph{width:100%;height:100%}
 .node{cursor:pointer;transition:opacity 0.2s}
 .node:hover{opacity:1 !important}
-.link{stroke-opacity:0.4;transition:stroke-opacity 0.2s,stroke-width 0.2s}
-.link.negative{stroke:var(--negative);stroke-dasharray:4,2}
-.link.positive{stroke:var(--positive)}
-.link.bridge{stroke:var(--text-faint);stroke-dasharray:2,2}
+.link{stroke-opacity:0.6;transition:stroke-opacity 0.3s,stroke-width 0.3s}
+.link.negative{stroke-dasharray:4,2}
 .tooltip{position:absolute;background:var(--bg2);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:0.75rem 1rem;font-family:var(--font-mono);font-size:0.7rem;pointer-events:none;opacity:0;transition:opacity 0.2s;box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:100}
 .tooltip .did{color:var(--accent);font-weight:700;margin-bottom:0.5rem}
 .tooltip .metric{display:flex;justify-content:space-between;gap:1rem;margin:0.25rem 0}
@@ -97,25 +96,85 @@ svg.graph{width:100%;height:100%}
 .hull{fill:none;stroke-width:2;opacity:0.4}
 .hull-merge{stroke:#22c55e}
 .hull-split{stroke:#ef4444}
+.hull-stable{stroke:rgba(255,255,255,0.15)}
 .mini-table{font-size:0.6rem;margin-top:0.35rem}
 .mini-row{display:flex;justify-content:space-between;padding:0.15rem 0}
 .mini-label{color:var(--text-dim)}
 .mini-value{color:var(--text);font-weight:700}
 
-/* Responsive */
-@media(max-width:1600px){
-  .container{grid-template-columns:1fr 350px 280px}
+/* ── Gradient Map Panel (left sidebar) ── */
+.gradient-section{padding:1rem;border-bottom:1px solid rgba(255,255,255,0.04)}
+.gradient-legend{display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;font-family:var(--font-mono);font-size:0.6rem}
+.gradient-legend-bar{height:8px;flex:1;border-radius:4px;background:linear-gradient(to right,#ef4444,#6b7280,#22c55e)}
+.gradient-legend-label{color:var(--text-dim)}
+.gradient-edge-item{padding:0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--bg);margin-bottom:0.4rem;font-family:var(--font-mono);font-size:0.6rem;cursor:pointer;transition:border-color 0.2s}
+.gradient-edge-item:hover{border-color:rgba(59,130,246,0.3)}
+.gradient-edge-item .edge-pair{display:flex;justify-content:space-between;align-items:center;margin-bottom:0.2rem}
+.gradient-edge-item .edge-did{color:var(--text);font-weight:700;font-size:0.6rem}
+.gradient-edge-item .edge-arrow{color:var(--text-faint);font-size:0.55rem}
+.gradient-edge-item .derivative-value{font-weight:700;font-size:0.7rem}
+.derivative-positive{color:var(--positive)}
+.derivative-negative{color:var(--negative)}
+.derivative-zero{color:var(--text-dim)}
+.gradient-sparkline{display:flex;align-items:flex-end;gap:1px;height:16px;margin-top:0.25rem}
+.gradient-sparkline .bar{width:3px;border-radius:1px;min-height:1px}
+.gradient-tab-row{display:flex;gap:0;margin-bottom:0.75rem;font-family:var(--font-mono);font-size:0.6rem}
+.gradient-tab{flex:1;text-align:center;padding:0.4rem 0;cursor:pointer;border-bottom:2px solid transparent;color:var(--text-dim);transition:all 0.2s}
+.gradient-tab:hover{color:var(--text)}
+.gradient-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.gradient-tab.tab-forming{border-bottom-color:var(--positive)}
+.gradient-tab.tab-forming.active{border-bottom-color:var(--positive);color:var(--positive)}
+.gradient-tab.tab-degrading{border-bottom-color:var(--negative)}
+.gradient-tab.tab-degrading.active{border-bottom-color:var(--negative);color:var(--negative)}
+
+/* Excitability glow effect — applied via D3 filter */
+.node-glow{filter:url(#excitabilityGlow)}
+
+/* Pulse animation for gradient spikes */
+@keyframes edgePulse{
+  0%{stroke-opacity:1;stroke-width:6}
+  50%{stroke-opacity:0.9;stroke-width:8}
+  100%{stroke-opacity:0.6;stroke-width:3}
 }
-@media(max-width:1200px){
-  .container{grid-template-columns:1fr 320px}
+.link-pulse{animation:edgePulse 0.6s ease-out forwards}
+
+/* Spike flash overlay */
+.spike-flash{position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:50;opacity:0;transition:opacity 0.15s}
+.spike-flash.show{opacity:1;animation:flashFade 0.8s ease-out forwards}
+@keyframes flashFade{0%{opacity:0.15}100%{opacity:0}}
+
+/* Responsive */
+@media(max-width:1800px){
+  .container{grid-template-columns:260px 1fr 350px 280px}
+}
+@media(max-width:1400px){
+  .container{grid-template-columns:240px 1fr 320px}
   .economy-panel{display:none}
-  .header-stats{gap:1rem}
+}
+@media(max-width:1100px){
+  .container{grid-template-columns:1fr 320px}
+  .gradient-panel{display:none}
+  .economy-panel{display:none}
 }
 </style>
 </head>
 <body>
 
+<!-- SVG filter definitions for glow effects -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <filter id="excitabilityGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="0" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+</svg>
+
 <!-- Header -->
+<div class="container">
 <div class="header">
   <div class="header-left">
     <div class="logo"><span>⬡</span> coherence explorer</div>
@@ -138,6 +197,42 @@ svg.graph{width:100%;height:100%}
       <div class="stat-label">Mean κ</div>
       <div class="stat-value" id="meanCurvature">—</div>
     </div>
+    <div class="stat-item">
+      <div class="stat-label">Gradient Flux</div>
+      <div class="stat-value" id="gradientFlux">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Gradient Map Panel (left sidebar) -->
+<div class="gradient-panel">
+  <div class="gradient-section">
+    <div class="section-title">Excitability Gradient</div>
+    <div class="gradient-legend">
+      <span class="gradient-legend-label">-κ'</span>
+      <div class="gradient-legend-bar"></div>
+      <span class="gradient-legend-label">+κ'</span>
+    </div>
+    <div class="gradient-tab-row">
+      <div class="gradient-tab tab-forming active" data-tab="forming">Forming</div>
+      <div class="gradient-tab tab-degrading" data-tab="degrading">Degrading</div>
+      <div class="gradient-tab" data-tab="all">All</div>
+    </div>
+    <div id="gradientEdgesContainer">
+      <div class="empty-state">Waiting for gradient data...</div>
+    </div>
+  </div>
+  <div class="gradient-section">
+    <div class="section-title">Excitable Agents</div>
+    <div id="excitableAgentsContainer">
+      <div class="empty-state">Waiting for profiles...</div>
+    </div>
+  </div>
+  <div class="gradient-section">
+    <div class="section-title">Spike Log</div>
+    <div id="spikeLogContainer">
+      <div class="empty-state">No spikes detected</div>
+    </div>
   </div>
 </div>
 
@@ -150,7 +245,9 @@ svg.graph{width:100%;height:100%}
     <div class="metric"><span class="metric-label">Curvature:</span><span class="metric-value curvature"></span></div>
     <div class="metric"><span class="metric-label">Score:</span><span class="metric-value score"></span></div>
     <div class="metric"><span class="metric-label">Diversity:</span><span class="metric-value diversity"></span></div>
+    <div class="metric"><span class="metric-label">Excitability:</span><span class="metric-value excitability"></span></div>
   </div>
+  <div class="spike-flash" id="spikeFlash"></div>
 </div>
 
 <!-- Sidebar -->
@@ -208,34 +305,65 @@ svg.graph{width:100%;height:100%}
     </div>
   </div>
 </div>
+</div>
 
 <script>
+// ═══════════════════════════════════════════════════════════════
 // Configuration
+// ═══════════════════════════════════════════════════════════════
 const NODE_URL = 'http://localhost:8000';
 const POLL_INTERVAL = 3000;
+const GRADIENT_POLL_INTERVAL = 5000;
+const NEIGHBORHOOD_POLL_INTERVAL = 10000;
 let pollTimer = null;
+let gradientPollTimer = null;
+let neighborhoodPollTimer = null;
 let graphData = { nodes: [], links: [] };
 let selectedDid = null;
+let gradientMapData = { forming: [], degrading: [] };
+let spikeLog = [];
+let activeGradientTab = 'forming';
 
+// ═══════════════════════════════════════════════════════════════
 // D3 Setup
+// ═══════════════════════════════════════════════════════════════
 const svg = d3.select('#graph');
-const width = window.innerWidth - 700;
-const height = window.innerHeight - 60;
-svg.attr('viewBox', [0, 0, width, height]);
+const graphAreaEl = document.querySelector('.graph-area');
+let currentWidth = graphAreaEl.clientWidth || (window.innerWidth - 980);
+let currentHeight = graphAreaEl.clientHeight || (window.innerHeight - 60);
+svg.attr('viewBox', [0, 0, currentWidth, currentHeight]);
+
+// SVG layer ordering: defs -> hulls -> links -> glow-links -> nodes
+const defs = svg.append('defs');
+
+// Gradient color scale for curvature derivative: red (-) -> gray (0) -> green (+)
+// We create individual gradients per edge at render time
 
 let hullGroup = svg.append('g').attr('class', 'hulls');
+let linkGroup = svg.append('g').attr('class', 'link-layer');
+let nodeGroup = svg.append('g').attr('class', 'node-layer');
 let neighborhoodsData = [];
 
 const simulation = d3.forceSimulation()
   .force('link', d3.forceLink().id(d => d.id).distance(120))
   .force('charge', d3.forceManyBody().strength(-300))
-  .force('center', d3.forceCenter(width / 2, height / 2))
+  .force('center', d3.forceCenter(currentWidth / 2, currentHeight / 2))
   .force('collision', d3.forceCollide().radius(d => d.radius + 10));
 
-let link = svg.append('g').selectAll('line');
-let node = svg.append('g').selectAll('g');
+let link = linkGroup.selectAll('line');
+let node = nodeGroup.selectAll('g');
 
+// ═══════════════════════════════════════════════════════════════
+// Curvature derivative color scale (smooth)
+// ═══════════════════════════════════════════════════════════════
+const derivativeColorScale = d3.scaleLinear()
+  .domain([-1, -0.01, 0, 0.01, 1])
+  .range(['#ef4444', '#b45454', '#6b7280', '#4a9e6a', '#22c55e'])
+  .clamp(true);
+
+// ═══════════════════════════════════════════════════════════════
 // Utility functions
+// ═══════════════════════════════════════════════════════════════
 function shortDid(did) {
   if (!did || did.length < 20) return did || 'unknown';
   return did.slice(0, 12) + '...' + did.slice(-4);
@@ -257,7 +385,25 @@ function scoreClass(score) {
   return 'low';
 }
 
+function edgeKey(a, b) {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function formatDerivative(val) {
+  if (val === 0 || val === undefined || val === null) return '0.000';
+  const sign = val > 0 ? '+' : '';
+  return sign + val.toFixed(3);
+}
+
+function derivativeClass(val) {
+  if (val > 0.001) return 'derivative-positive';
+  if (val < -0.001) return 'derivative-negative';
+  return 'derivative-zero';
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Fetch functions
+// ═══════════════════════════════════════════════════════════════
 async function fetchHealth() {
   try {
     const res = await fetch(`${NODE_URL}/network/health`);
@@ -288,7 +434,6 @@ async function fetchIdentities() {
     if (!res.ok) throw new Error('Identity endpoint failed');
     const data = await res.json();
 
-    // Handle both array and object with dids property
     let dids = [];
     if (Array.isArray(data)) {
       dids = data;
@@ -311,13 +456,13 @@ async function fetchCoherence(did) {
     if (!res.ok) return null;
     const data = await res.json();
 
-    // Handle various response formats
     const profile = data.profile || data;
     return {
       topological_mass: profile.topological_mass || 0,
       mean_local_curvature: profile.mean_local_curvature || 0,
       composite_score: profile.composite_score || 0,
-      relational_diversity: profile.relational_diversity || 0
+      relational_diversity: profile.relational_diversity || 0,
+      mean_gradient: profile.mean_gradient || profile.excitability || 0
     };
   } catch (err) {
     console.error(`Failed to fetch coherence for ${did}:`, err);
@@ -348,6 +493,33 @@ async function fetchEdgeCurvature(didA, didB) {
   }
 }
 
+async function fetchGradientMap() {
+  try {
+    const res = await fetch(`${NODE_URL}/coherence/gradient/map?top_n=10&window=100`);
+    if (!res.ok) return { forming: [], degrading: [] };
+    const data = await res.json();
+    return {
+      forming: data.forming || data.top_forming || [],
+      degrading: data.degrading || data.top_degrading || []
+    };
+  } catch (err) {
+    console.error('Failed to fetch gradient map:', err);
+    return { forming: [], degrading: [] };
+  }
+}
+
+async function fetchNeighborhoods() {
+  try {
+    const res = await fetch(`${NODE_URL}/topology/neighborhoods`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.neighborhoods || data || [];
+  } catch (err) {
+    console.error('Failed to fetch neighborhoods:', err);
+    return [];
+  }
+}
+
 async function fetchProposals() {
   try {
     const res = await fetch(`${NODE_URL}/proposal/list`);
@@ -368,18 +540,6 @@ async function fetchIntents() {
     return data.intents || data || [];
   } catch (err) {
     console.error('Failed to fetch intents:', err);
-    return [];
-  }
-}
-
-async function fetchNeighborhoods() {
-  try {
-    const res = await fetch(`${NODE_URL}/topology/neighborhoods`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.neighborhoods || data || [];
-  } catch (err) {
-    console.error('Failed to fetch neighborhoods:', err);
     return [];
   }
 }
@@ -408,7 +568,9 @@ async function fetchPool() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
 // Graph update
+// ═══════════════════════════════════════════════════════════════
 async function updateGraph() {
   const dids = await fetchIdentities();
   if (dids.length === 0) {
@@ -416,13 +578,11 @@ async function updateGraph() {
     return;
   }
 
-  // Fetch coherence for all DIDs
   const profiles = await Promise.all(dids.map(async did => {
     const coherence = await fetchCoherence(did);
     return { did, coherence };
   }));
 
-  // Build nodes
   const nodes = profiles
     .filter(p => p.coherence)
     .map(p => ({
@@ -431,6 +591,7 @@ async function updateGraph() {
       curvature: p.coherence.mean_local_curvature,
       score: p.coherence.composite_score,
       diversity: p.coherence.relational_diversity,
+      meanGradient: p.coherence.mean_gradient,
       radius: massToRadius(p.coherence.topological_mass)
     }));
 
@@ -439,7 +600,13 @@ async function updateGraph() {
     return;
   }
 
-  // Fetch neighbors for all nodes to build edges
+  // Build edge map from gradient data for derivative-aware coloring
+  const edgeDerivativeMap = {};
+  for (const edge of [...gradientMapData.forming, ...gradientMapData.degrading]) {
+    const key = edgeKey(edge.source_did || edge.from, edge.target_did || edge.to);
+    edgeDerivativeMap[key] = edge.derivative || edge.curvature_derivative || 0;
+  }
+
   const edgeSet = new Set();
   const links = [];
 
@@ -452,10 +619,12 @@ async function updateGraph() {
         const key2 = `${neighbor}-${n.id}`;
         if (!edgeSet.has(key1) && !edgeSet.has(key2)) {
           const curvature = await fetchEdgeCurvature(n.id, neighbor);
+          const derivKey = edgeKey(n.id, neighbor);
           links.push({
             source: n.id,
             target: neighbor,
-            curvature
+            curvature,
+            derivative: edgeDerivativeMap[derivKey] || 0
           });
           edgeSet.add(key1);
         }
@@ -465,36 +634,79 @@ async function updateGraph() {
 
   graphData = { nodes, links };
 
-  // Fetch neighborhoods and store for rendering
   neighborhoodsData = await fetchNeighborhoods();
 
   renderGraph();
   renderScoreboard(nodes);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Render the D3 force graph with gradient visualization
+// ═══════════════════════════════════════════════════════════════
 function renderGraph() {
   const { nodes, links } = graphData;
 
-  // Update links
-  link = link.data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`)
-    .join('line')
+  // ── Edge gradient definitions ──
+  // Create a unique linear gradient per edge for smooth derivative coloring
+  const gradientSel = defs.selectAll('linearGradient.edge-grad')
+    .data(links, d => edgeKey(d.source.id || d.source, d.target.id || d.target));
+
+  gradientSel.exit().remove();
+
+  const gradientEnter = gradientSel.enter()
+    .append('linearGradient')
+    .attr('class', 'edge-grad')
+    .attr('gradientUnits', 'userSpaceOnUse');
+
+  gradientEnter.append('stop').attr('offset', '0%');
+  gradientEnter.append('stop').attr('offset', '100%');
+
+  const gradientMerge = gradientEnter.merge(gradientSel);
+  gradientMerge.attr('id', d => 'eg-' + edgeKey(d.source.id || d.source, d.target.id || d.target).replace(/[^a-zA-Z0-9]/g, '_'));
+
+  gradientMerge.each(function(d) {
+    const deriv = d.derivative || 0;
+    const color = derivativeColorScale(deriv);
+    d3.select(this).select('stop:first-child').attr('stop-color', color);
+    d3.select(this).select('stop:last-child').attr('stop-color', color);
+  });
+
+  // ── Links ──
+  link = linkGroup.selectAll('line')
+    .data(links, d => edgeKey(d.source.id || d.source, d.target.id || d.target));
+
+  link.exit().remove();
+
+  const linkEnter = link.enter().append('line');
+  link = linkEnter.merge(link)
     .attr('class', d => {
-      const curv = d.curvature;
-      if (curv < -0.05) return 'link negative';
-      if (curv > 0.1) return 'link positive';
-      return 'link bridge';
+      const deriv = d.derivative || 0;
+      let cls = 'link';
+      if (deriv < -0.01) cls += ' negative';
+      return cls;
+    })
+    .attr('stroke', d => {
+      const deriv = d.derivative || 0;
+      return derivativeColorScale(deriv);
     })
     .attr('stroke-width', d => {
-      const curv = d.curvature;
-      if (curv > 0.1) return 3;
-      if (curv > 0) return 2;
-      return 1;
+      const absDeriv = Math.abs(d.derivative || 0);
+      // Thicker lines for stronger derivatives
+      return Math.max(1.5, Math.min(5, 1.5 + absDeriv * 20));
+    })
+    .attr('stroke-opacity', d => {
+      const absDeriv = Math.abs(d.derivative || 0);
+      return Math.max(0.3, Math.min(0.9, 0.3 + absDeriv * 4));
     });
 
-  // Update nodes
-  const nodeGroups = svg.select('g:last-child').selectAll('g')
-    .data(nodes, d => d.id)
-    .join('g')
+  // ── Nodes with excitability glow ──
+  const nodeGroups = nodeGroup.selectAll('g.node')
+    .data(nodes, d => d.id);
+
+  nodeGroups.exit().remove();
+
+  const nodeEnter = nodeGroups.enter()
+    .append('g')
     .attr('class', 'node')
     .call(drag(simulation))
     .on('mouseenter', showTooltip)
@@ -504,8 +716,40 @@ function renderGraph() {
       renderScoreboard(nodes);
     });
 
-  nodeGroups.selectAll('circle').remove();
-  nodeGroups.append('circle')
+  // Glow circle (behind main circle)
+  nodeEnter.append('circle')
+    .attr('class', 'glow-ring');
+
+  // Main circle
+  nodeEnter.append('circle')
+    .attr('class', 'main-circle');
+
+  const nodeMerge = nodeEnter.merge(nodeGroups);
+
+  // Update glow ring — intensity proportional to mean gradient (excitability)
+  nodeMerge.select('.glow-ring')
+    .attr('r', d => {
+      const excitability = Math.abs(d.meanGradient || 0);
+      return d.radius + 4 + excitability * 30;
+    })
+    .attr('fill', 'none')
+    .attr('stroke', d => {
+      const grad = d.meanGradient || 0;
+      if (grad > 0.01) return '#22c55e';
+      if (grad < -0.01) return '#ef4444';
+      return '#3b82f6';
+    })
+    .attr('stroke-width', d => {
+      const excitability = Math.abs(d.meanGradient || 0);
+      return Math.max(0, Math.min(4, excitability * 20));
+    })
+    .attr('stroke-opacity', d => {
+      const excitability = Math.abs(d.meanGradient || 0);
+      return Math.max(0, Math.min(0.6, excitability * 3));
+    });
+
+  // Update main circle
+  nodeMerge.select('.main-circle')
     .attr('r', d => d.radius)
     .attr('fill', d => curvatureColor(d.curvature))
     .attr('opacity', 0.8);
@@ -516,19 +760,28 @@ function renderGraph() {
   simulation.alpha(0.3).restart();
 
   simulation.on('tick', () => {
-    link
+    linkGroup.selectAll('line')
       .attr('x1', d => d.source.x)
       .attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x)
       .attr('y2', d => d.target.y);
 
-    nodeGroups.attr('transform', d => `translate(${d.x},${d.y})`);
+    // Also update gradient orientation to follow edge direction
+    defs.selectAll('linearGradient.edge-grad')
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
 
-    // Update hulls after node positions settle
+    nodeMerge.attr('transform', d => `translate(${d.x},${d.y})`);
+
     renderNeighborhoodHulls();
   });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Neighborhood hull rendering (convex hull boundaries)
+// ═══════════════════════════════════════════════════════════════
 function renderNeighborhoodHulls() {
   if (!neighborhoodsData || neighborhoodsData.length === 0) {
     hullGroup.selectAll('path').remove();
@@ -536,6 +789,7 @@ function renderNeighborhoodHulls() {
   }
 
   const { nodes } = graphData;
+  const hullColors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
 
   const hulls = hullGroup.selectAll('path')
     .data(neighborhoodsData, d => d.id || d.cluster_hash);
@@ -548,8 +802,20 @@ function renderNeighborhoodHulls() {
     .attr('class', d => {
       const isMerge = d.boundary_type === 'merge';
       const isSplit = d.boundary_type === 'split';
-      return `hull ${isMerge ? 'hull-merge' : ''} ${isSplit ? 'hull-split' : ''}`;
+      return `hull ${isMerge ? 'hull-merge' : isSplit ? 'hull-split' : 'hull-stable'}`;
     })
+    .attr('stroke', (d, i) => {
+      if (d.boundary_type === 'merge') return '#22c55e';
+      if (d.boundary_type === 'split') return '#ef4444';
+      return hullColors[i % hullColors.length];
+    })
+    .attr('fill', (d, i) => {
+      const base = d.boundary_type === 'merge' ? '#22c55e' :
+                   d.boundary_type === 'split' ? '#ef4444' :
+                   hullColors[i % hullColors.length];
+      return base;
+    })
+    .attr('fill-opacity', 0.03)
     .attr('d', d => {
       const members = d.members || d.dids || [];
       const points = members
@@ -559,10 +825,230 @@ function renderNeighborhoodHulls() {
 
       if (points.length < 3) return null;
 
-      return d3.line().curve(d3.curveBasisClosed)(d3.polygonHull(points));
+      // Add padding to hull points for visual breathing room
+      const hull = d3.polygonHull(points);
+      if (!hull) return null;
+
+      // Expand hull outward by a small margin
+      const centroid = d3.polygonCentroid(hull);
+      const expanded = hull.map(([x, y]) => {
+        const dx = x - centroid[0];
+        const dy = y - centroid[1];
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const scale = (dist + 20) / dist;
+        return [centroid[0] + dx * scale, centroid[1] + dy * scale];
+      });
+
+      return d3.line().curve(d3.curveBasisClosed)(expanded);
     });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Gradient Map panel rendering
+// ═══════════════════════════════════════════════════════════════
+function renderGradientPanel() {
+  const container = document.getElementById('gradientEdgesContainer');
+  let edges;
+
+  if (activeGradientTab === 'forming') {
+    edges = gradientMapData.forming;
+  } else if (activeGradientTab === 'degrading') {
+    edges = gradientMapData.degrading;
+  } else {
+    edges = [...gradientMapData.forming, ...gradientMapData.degrading]
+      .sort((a, b) => Math.abs(b.derivative || b.curvature_derivative || 0) - Math.abs(a.derivative || a.curvature_derivative || 0));
+  }
+
+  if (!edges || edges.length === 0) {
+    container.innerHTML = `<div class="empty-state">${
+      activeGradientTab === 'forming' ? 'No forming edges' :
+      activeGradientTab === 'degrading' ? 'No degrading edges' :
+      'No gradient data'
+    }</div>`;
+    return;
+  }
+
+  container.innerHTML = edges.slice(0, 10).map(edge => {
+    const from = edge.source_did || edge.from || '';
+    const to = edge.target_did || edge.to || '';
+    const deriv = edge.derivative || edge.curvature_derivative || 0;
+    const curv = edge.curvature || 0;
+    const history = edge.history || [];
+
+    return `
+      <div class="gradient-edge-item" data-from="${from}" data-to="${to}">
+        <div class="edge-pair">
+          <span class="edge-did">${shortDid(from)}</span>
+          <span class="edge-arrow">↔</span>
+          <span class="edge-did">${shortDid(to)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text-dim);font-size:0.55rem">κ=${curv.toFixed(3)}</span>
+          <span class="derivative-value ${derivativeClass(deriv)}">${formatDerivative(deriv)}</span>
+        </div>
+        ${history.length > 0 ? `
+          <div class="gradient-sparkline">
+            ${history.slice(-20).map(v => {
+              const h = Math.max(1, Math.min(16, Math.abs(v) * 80));
+              const color = v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : '#6b7280';
+              return `<div class="bar" style="height:${h}px;background:${color}"></div>`;
+            }).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Click handler to highlight edge in graph
+  container.querySelectorAll('.gradient-edge-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const from = item.dataset.from;
+      const to = item.dataset.to;
+      highlightEdge(from, to);
+    });
+  });
+
+  // Update flux stat in header
+  const totalFlux = [...gradientMapData.forming, ...gradientMapData.degrading]
+    .reduce((sum, e) => sum + Math.abs(e.derivative || e.curvature_derivative || 0), 0);
+  const fluxEl = document.getElementById('gradientFlux');
+  fluxEl.textContent = totalFlux.toFixed(3);
+  fluxEl.className = totalFlux > 0.1 ? 'stat-value positive' : 'stat-value';
+}
+
+function renderExcitableAgents() {
+  const container = document.getElementById('excitableAgentsContainer');
+  const { nodes } = graphData;
+
+  if (!nodes || nodes.length === 0) {
+    container.innerHTML = '<div class="empty-state">No agents</div>';
+    return;
+  }
+
+  const sorted = [...nodes]
+    .sort((a, b) => Math.abs(b.meanGradient || 0) - Math.abs(a.meanGradient || 0))
+    .slice(0, 8);
+
+  container.innerHTML = sorted.map(n => {
+    const grad = n.meanGradient || 0;
+    const absGrad = Math.abs(grad);
+    const barWidth = Math.min(100, absGrad * 500);
+    const barColor = grad > 0 ? '#22c55e' : grad < 0 ? '#ef4444' : '#6b7280';
+
+    return `
+      <div class="gradient-edge-item" style="cursor:default">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.2rem">
+          <span class="edge-did">${shortDid(n.id)}</span>
+          <span class="${derivativeClass(grad)}" style="font-weight:700;font-size:0.65rem">${formatDerivative(grad)}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${barWidth}%;background:${barColor}"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderSpikeLog() {
+  const container = document.getElementById('spikeLogContainer');
+
+  if (spikeLog.length === 0) {
+    container.innerHTML = '<div class="empty-state">No spikes detected</div>';
+    return;
+  }
+
+  container.innerHTML = spikeLog.slice(-8).reverse().map(spike => {
+    const from = spike.source_did || spike.from || '';
+    const to = spike.target_did || spike.to || '';
+    const deriv = spike.derivative || spike.magnitude || 0;
+    const time = spike.timestamp ? new Date(spike.timestamp).toLocaleTimeString() : 'now';
+
+    return `
+      <div class="gradient-edge-item" style="border-left:3px solid ${deriv > 0 ? '#22c55e' : '#ef4444'}">
+        <div style="display:flex;justify-content:space-between;font-size:0.55rem;color:var(--text-dim);margin-bottom:0.15rem">
+          <span>${time}</span>
+          <span class="${derivativeClass(deriv)}" style="font-weight:700">${formatDerivative(deriv)}</span>
+        </div>
+        <div class="edge-pair">
+          <span class="edge-did">${shortDid(from)}</span>
+          <span class="edge-arrow">↔</span>
+          <span class="edge-did">${shortDid(to)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Edge pulse animation (gradient spike effect)
+// ═══════════════════════════════════════════════════════════════
+function pulseEdge(fromDid, toDid) {
+  const key = edgeKey(fromDid, toDid);
+
+  linkGroup.selectAll('line')
+    .filter(d => edgeKey(d.source.id || d.source, d.target.id || d.target) === key)
+    .classed('link-pulse', true)
+    .transition()
+    .duration(600)
+    .attr('stroke-opacity', 1)
+    .attr('stroke-width', 8)
+    .transition()
+    .duration(400)
+    .attr('stroke-opacity', d => {
+      const absDeriv = Math.abs(d.derivative || 0);
+      return Math.max(0.3, Math.min(0.9, 0.3 + absDeriv * 4));
+    })
+    .attr('stroke-width', d => {
+      const absDeriv = Math.abs(d.derivative || 0);
+      return Math.max(1.5, Math.min(5, 1.5 + absDeriv * 20));
+    })
+    .on('end', function() {
+      d3.select(this).classed('link-pulse', false);
+    });
+
+  // Flash the graph area briefly
+  const flash = document.getElementById('spikeFlash');
+  flash.style.background = 'radial-gradient(circle, rgba(59,130,246,0.1) 0%, transparent 70%)';
+  flash.classList.add('show');
+  setTimeout(() => flash.classList.remove('show'), 800);
+}
+
+function highlightEdge(fromDid, toDid) {
+  const key = edgeKey(fromDid, toDid);
+
+  // Dim all, highlight target
+  linkGroup.selectAll('line')
+    .attr('stroke-opacity', d => {
+      return edgeKey(d.source.id || d.source, d.target.id || d.target) === key ? 1 : 0.1;
+    })
+    .attr('stroke-width', d => {
+      return edgeKey(d.source.id || d.source, d.target.id || d.target) === key ? 6 : 1;
+    });
+
+  // Restore after 2s
+  setTimeout(() => {
+    linkGroup.selectAll('line')
+      .attr('stroke-opacity', d => {
+        const absDeriv = Math.abs(d.derivative || 0);
+        return Math.max(0.3, Math.min(0.9, 0.3 + absDeriv * 4));
+      })
+      .attr('stroke-width', d => {
+        const absDeriv = Math.abs(d.derivative || 0);
+        return Math.max(1.5, Math.min(5, 1.5 + absDeriv * 20));
+      });
+  }, 2000);
+}
+
+function highlightNode(did) {
+  nodeGroup.selectAll('.node .main-circle').attr('opacity', d => d.id === did ? 1 : 0.3);
+  setTimeout(() => {
+    nodeGroup.selectAll('.node .main-circle').attr('opacity', 0.8);
+  }, 1500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Scoreboard
+// ═══════════════════════════════════════════════════════════════
 function renderScoreboard(nodes) {
   const scoreboard = document.getElementById('scoreboard');
 
@@ -593,14 +1079,13 @@ function renderScoreboard(nodes) {
           <span class="score-value ${n.curvature > 0 ? 'high' : 'low'}">${n.curvature.toFixed(3)}</span>
         </div>
         <div class="score-item">
-          <span class="score-label">Diversity</span>
-          <span class="score-value">${n.diversity.toFixed(2)}</span>
+          <span class="score-label">Excitability</span>
+          <span class="score-value ${derivativeClass(n.meanGradient)}">${formatDerivative(n.meanGradient)}</span>
         </div>
       </div>
     </div>
   `).join('');
 
-  // Add click handlers
   scoreboard.querySelectorAll('.scoreboard-item').forEach(item => {
     item.addEventListener('click', () => {
       selectedDid = item.dataset.did;
@@ -610,13 +1095,9 @@ function renderScoreboard(nodes) {
   });
 }
 
-function highlightNode(did) {
-  svg.selectAll('.node circle').attr('opacity', d => d.id === did ? 1 : 0.3);
-  setTimeout(() => {
-    svg.selectAll('.node circle').attr('opacity', 0.8);
-  }, 1500);
-}
-
+// ═══════════════════════════════════════════════════════════════
+// Tooltip
+// ═══════════════════════════════════════════════════════════════
 function showTooltip(event, d) {
   const tooltip = document.getElementById('tooltip');
   tooltip.querySelector('.did').textContent = shortDid(d.id);
@@ -624,6 +1105,7 @@ function showTooltip(event, d) {
   tooltip.querySelector('.curvature').textContent = d.curvature.toFixed(3);
   tooltip.querySelector('.score').textContent = d.score.toFixed(3);
   tooltip.querySelector('.diversity').textContent = d.diversity.toFixed(2);
+  tooltip.querySelector('.excitability').textContent = formatDerivative(d.meanGradient);
 
   tooltip.style.left = `${event.pageX + 15}px`;
   tooltip.style.top = `${event.pageY + 15}px`;
@@ -634,6 +1116,9 @@ function hideTooltip() {
   document.getElementById('tooltip').style.opacity = 0;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Drag behavior
+// ═══════════════════════════════════════════════════════════════
 function drag(simulation) {
   function dragstarted(event) {
     if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -658,7 +1143,9 @@ function drag(simulation) {
     .on('end', dragended);
 }
 
+// ═══════════════════════════════════════════════════════════════
 // Attack mode
+// ═══════════════════════════════════════════════════════════════
 async function launchAttack() {
   const btn = document.getElementById('attackBtn');
   const feedback = document.getElementById('attackFeedback');
@@ -668,7 +1155,6 @@ async function launchAttack() {
   feedback.classList.add('show');
 
   try {
-    // Register root
     const rootRes = await fetch(`${NODE_URL}/identity/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -682,7 +1168,6 @@ async function launchAttack() {
 
     feedback.textContent = `Root registered: ${shortDid(rootDid)}`;
 
-    // Register 5 leaves
     const leaves = [];
     for (let i = 0; i < 5; i++) {
       const leafRes = await fetch(`${NODE_URL}/identity/register`, {
@@ -698,7 +1183,6 @@ async function launchAttack() {
       await new Promise(r => setTimeout(r, 100));
     }
 
-    // Create introductions (star topology)
     for (const leaf of leaves) {
       await fetch(`${NODE_URL}/introduction`, {
         method: 'POST',
@@ -715,7 +1199,6 @@ async function launchAttack() {
 
     feedback.textContent = `Attack complete. Star topology created. Watch curvature degrade.`;
 
-    // Force immediate refresh
     setTimeout(() => {
       updateAll();
       feedback.classList.remove('show');
@@ -728,7 +1211,9 @@ async function launchAttack() {
   }
 }
 
-// Render economy panels
+// ═══════════════════════════════════════════════════════════════
+// Economy panel rendering
+// ═══════════════════════════════════════════════════════════════
 function renderProposals(proposals) {
   const container = document.getElementById('proposalsContainer');
   if (proposals.length === 0) {
@@ -750,7 +1235,7 @@ function renderProposals(proposals) {
           <span style="color:var(--text-dim)">${statusLabel}</span>
         </div>
         <div style="font-size:0.6rem;color:var(--text-dim)">
-          ${p.joiners?.length || 0}/${p.min_participants} participants • ${p.committed_mass.toFixed(1)}/${p.activation_mass.toFixed(1)} mass
+          ${p.joiners?.length || 0}/${p.min_participants} participants ● ${p.committed_mass.toFixed(1)}/${p.activation_mass.toFixed(1)} mass
         </div>
         <div class="progress-bar">
           <div class="progress-fill status-${status}" style="width:${progress}%"></div>
@@ -930,27 +1415,100 @@ async function updateEconomyPanels() {
   renderNeighborhoods(neighborhoods);
 }
 
-// Poll loop
+// ═══════════════════════════════════════════════════════════════
+// Gradient-specific polling (every 5s per spec)
+// ═══════════════════════════════════════════════════════════════
+async function updateGradientMap() {
+  gradientMapData = await fetchGradientMap();
+  renderGradientPanel();
+  renderExcitableAgents();
+
+  // Update edge derivatives in existing graph data
+  const derivMap = {};
+  for (const edge of [...gradientMapData.forming, ...gradientMapData.degrading]) {
+    const key = edgeKey(edge.source_did || edge.from, edge.target_did || edge.to);
+    derivMap[key] = edge.derivative || edge.curvature_derivative || 0;
+  }
+
+  if (graphData.links) {
+    let changed = false;
+    graphData.links.forEach(l => {
+      const key = edgeKey(l.source.id || l.source, l.target.id || l.target);
+      if (derivMap[key] !== undefined && l.derivative !== derivMap[key]) {
+        l.derivative = derivMap[key];
+        changed = true;
+      }
+    });
+
+    // Re-apply edge colors if derivatives changed
+    if (changed) {
+      linkGroup.selectAll('line')
+        .attr('stroke', d => derivativeColorScale(d.derivative || 0))
+        .attr('stroke-width', d => {
+          const absDeriv = Math.abs(d.derivative || 0);
+          return Math.max(1.5, Math.min(5, 1.5 + absDeriv * 20));
+        })
+        .attr('stroke-opacity', d => {
+          const absDeriv = Math.abs(d.derivative || 0);
+          return Math.max(0.3, Math.min(0.9, 0.3 + absDeriv * 4));
+        });
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Poll loops
+// ═══════════════════════════════════════════════════════════════
 async function updateAll() {
   await fetchHealth();
   await updateGraph();
   await updateEconomyPanels();
+  await updateGradientMap();
 }
 
 function startPolling() {
   updateAll();
-  pollTimer = setInterval(updateAll, POLL_INTERVAL);
+  pollTimer = setInterval(async () => {
+    await fetchHealth();
+    await updateGraph();
+    await updateEconomyPanels();
+  }, POLL_INTERVAL);
+
+  // Gradient map on its own cadence (5s per spec)
+  gradientPollTimer = setInterval(updateGradientMap, GRADIENT_POLL_INTERVAL);
+
+  // Neighborhoods on their own cadence (10s per spec)
+  neighborhoodPollTimer = setInterval(async () => {
+    neighborhoodsData = await fetchNeighborhoods();
+    renderNeighborhoods(neighborhoodsData);
+  }, NEIGHBORHOOD_POLL_INTERVAL);
 }
 
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);
+  if (gradientPollTimer) clearInterval(gradientPollTimer);
+  if (neighborhoodPollTimer) clearInterval(neighborhoodPollTimer);
 }
 
+// ═══════════════════════════════════════════════════════════════
 // Event handlers
+// ═══════════════════════════════════════════════════════════════
 document.getElementById('refreshBtn').addEventListener('click', updateAll);
 document.getElementById('attackBtn').addEventListener('click', launchAttack);
 
-// SSE Event Stream
+// Gradient tab switching
+document.querySelectorAll('.gradient-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.gradient-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    activeGradientTab = tab.dataset.tab;
+    renderGradientPanel();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SSE Event Stream (with gradient spike topics)
+// ═══════════════════════════════════════════════════════════════
 let eventSource = null;
 
 function setupEventStream() {
@@ -958,8 +1516,63 @@ function setupEventStream() {
     eventSource.close();
   }
 
-  eventSource = new EventSource(`${NODE_URL}/watch`);
+  // Subscribe to gradient_spike and gradient_collapse topics
+  eventSource = new EventSource(`${NODE_URL}/watch?topics=gradient_spike,gradient_collapse`);
 
+  // ── Gradient spike events ──
+  eventSource.addEventListener('CoherenceGradientSpike', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      console.log('CoherenceGradientSpike:', data);
+
+      // Record in spike log
+      spikeLog.push({
+        ...data,
+        timestamp: data.timestamp || Date.now()
+      });
+      if (spikeLog.length > 50) spikeLog = spikeLog.slice(-50);
+      renderSpikeLog();
+
+      // Pulse the affected edge
+      const from = data.source_did || data.from;
+      const to = data.target_did || data.to;
+      if (from && to) {
+        pulseEdge(from, to);
+      }
+
+      // Refresh gradient map immediately
+      updateGradientMap();
+    } catch (err) {
+      console.error('Failed to parse gradient spike:', err);
+    }
+  });
+
+  eventSource.addEventListener('CoherenceGradientCollapse', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      console.log('CoherenceGradientCollapse:', data);
+
+      spikeLog.push({
+        ...data,
+        timestamp: data.timestamp || Date.now(),
+        derivative: -(Math.abs(data.derivative || data.magnitude || 0))
+      });
+      if (spikeLog.length > 50) spikeLog = spikeLog.slice(-50);
+      renderSpikeLog();
+
+      const from = data.source_did || data.from;
+      const to = data.target_did || data.to;
+      if (from && to) {
+        pulseEdge(from, to);
+      }
+
+      updateGradientMap();
+    } catch (err) {
+      console.error('Failed to parse gradient collapse:', err);
+    }
+  });
+
+  // ── Existing economy events ──
   eventSource.addEventListener('ProposalCreated', (e) => {
     console.log('ProposalCreated:', e.data);
     updateEconomyPanels();
@@ -1009,23 +1622,26 @@ function setupEventStream() {
 
   eventSource.onerror = (err) => {
     console.error('EventSource error:', err);
-    // Reconnect after 5s
     setTimeout(() => {
       setupEventStream();
     }, 5000);
   };
 }
 
+// ═══════════════════════════════════════════════════════════════
 // Window resize
+// ═══════════════════════════════════════════════════════════════
 window.addEventListener('resize', () => {
-  const newWidth = window.innerWidth - 700;
-  const newHeight = window.innerHeight - 60;
-  svg.attr('viewBox', [0, 0, newWidth, newHeight]);
-  simulation.force('center', d3.forceCenter(newWidth / 2, newHeight / 2));
+  currentWidth = graphAreaEl.clientWidth || (window.innerWidth - 980);
+  currentHeight = graphAreaEl.clientHeight || (window.innerHeight - 60);
+  svg.attr('viewBox', [0, 0, currentWidth, currentHeight]);
+  simulation.force('center', d3.forceCenter(currentWidth / 2, currentHeight / 2));
   simulation.alpha(0.3).restart();
 });
 
+// ═══════════════════════════════════════════════════════════════
 // Start
+// ═══════════════════════════════════════════════════════════════
 startPolling();
 setupEventStream();
 </script>
