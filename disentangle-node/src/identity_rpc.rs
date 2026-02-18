@@ -1659,6 +1659,8 @@ fn should_emit_event(
             | NodeEvent::IntentArchived { .. } => "intent",
             NodeEvent::NeighborhoodMerge { .. } | NodeEvent::NeighborhoodSplit { .. } => "topology",
             NodeEvent::DistributionComputed { .. } => "oracle",
+            NodeEvent::CoherenceGradientSpike { .. }
+            | NodeEvent::CoherenceGradientCollapse { .. } => "gradient",
         };
         topics.contains(event_topic)
     };
@@ -1689,6 +1691,125 @@ fn should_emit_event(
     } else {
         true
     }
+}
+
+// Excitability Gradient endpoints
+
+#[derive(Deserialize)]
+pub struct GradientQueryParams {
+    window: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct CurvatureDerivativeResponse {
+    derivative: serde_json::Value,
+}
+
+pub async fn coherence_gradient_edge_handler(
+    State(state): State<IdentityState>,
+    Path((did_a, did_b)): Path<(String, String)>,
+    Query(params): Query<GradientQueryParams>,
+) -> Result<Json<CurvatureDerivativeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let window = params.window.unwrap_or(100);
+    let derivative = mgr
+        .curvature_derivative(&did_a, &did_b, window)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "No curvature history found for edge".to_string(),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    let derivative_json = serde_json::to_value(&derivative).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize derivative: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(CurvatureDerivativeResponse {
+        derivative: derivative_json,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct ExcitabilityProfileResponse {
+    profile: serde_json::Value,
+}
+
+pub async fn coherence_excitability_handler(
+    State(state): State<IdentityState>,
+    Path(did): Path<String>,
+    Query(params): Query<GradientQueryParams>,
+) -> Result<Json<ExcitabilityProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let window = params.window.unwrap_or(100);
+    let profile = mgr.excitability_profile(&did, window).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("No excitability profile for DID: {}", did),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let profile_json = serde_json::to_value(&profile).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize profile: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(ExcitabilityProfileResponse {
+        profile: profile_json,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct GradientMapQueryParams {
+    top_n: Option<usize>,
+    window: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct GradientMapResponse {
+    map: serde_json::Value,
+}
+
+pub async fn coherence_gradient_map_handler(
+    State(state): State<IdentityState>,
+    Query(params): Query<GradientMapQueryParams>,
+) -> Result<Json<GradientMapResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let top_n = params.top_n.unwrap_or(20);
+    let window = params.window.unwrap_or(100);
+    let map = mgr.coherence_gradient_map(top_n, window);
+
+    let map_json = serde_json::to_value(&map).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize gradient map: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(GradientMapResponse { map: map_json }))
 }
 
 // Network Health endpoint

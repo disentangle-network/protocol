@@ -6,6 +6,7 @@ use crate::did::DID;
 use crate::graph::IdentityGraph;
 use disentangle_dag::{fp_mul, FixedPoint, MIN_CURVATURE_WEIGHT, SCALE};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const COHERENCE_HALF_LIFE: u64 = 10_000;
 
@@ -118,7 +119,7 @@ impl CoherenceProfile {
     ///
     /// Phase 1 uses an additive weighted formula (40% mass, 30% curvature,
     /// 20% diversity, 10% temporal depth) for robustness when some components
-    /// are zero. The specification describes a multiplicative formula
+    /// are zero. The PPA Detailed Description specifies a multiplicative formula
     /// (C = TM * MC * log(RD) * sqrt(TD) * CC * IC / normalization) which will
     /// be implemented in Phase 2 once all component measures are reliably
     /// non-zero through ZK integration.
@@ -146,6 +147,61 @@ impl CoherenceProfile {
         (mass_component + curvature_component + diversity_component + depth_component) as FixedPoint
     }
 }
+
+/// Curvature derivative for a single edge over a depth window
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurvatureDerivative {
+    pub did_a: String,
+    pub did_b: String,
+    /// Curvature at window start
+    pub kappa_start: f64,
+    /// Curvature at window end (current)
+    pub kappa_end: f64,
+    /// Rate of change: (kappa_end - kappa_start) / window_size
+    pub derivative: f64,
+    /// Depth window used
+    pub depth_start: u64,
+    pub depth_end: u64,
+}
+
+/// Excitability profile for an agent — aggregated gradient across all edges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExcitabilityProfile {
+    pub did: String,
+    /// Mean curvature derivative across all incident edges
+    pub mean_gradient: f64,
+    /// Max curvature derivative (the "hottest" collaboration)
+    pub max_gradient: f64,
+    /// Number of edges with positive derivative (forming coherence)
+    pub forming_count: u32,
+    /// Number of edges with negative derivative (degrading coherence)
+    pub degrading_count: u32,
+    /// Edges sorted by derivative (highest first)
+    pub edge_gradients: Vec<CurvatureDerivative>,
+    /// Depth window used
+    pub depth_window: u64,
+}
+
+/// Network-level gradient map — where is coherence forming?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoherenceGradientMap {
+    /// Top-N edges by positive curvature derivative
+    pub forming: Vec<CurvatureDerivative>,
+    /// Top-N edges by negative curvature derivative
+    pub degrading: Vec<CurvatureDerivative>,
+    /// Top-N agents by excitability (mean gradient)
+    pub most_excitable: Vec<ExcitabilityProfile>,
+    /// Network-wide mean gradient
+    pub network_gradient: f64,
+    pub depth_window: u64,
+    pub computed_at_depth: u64,
+}
+
+/// Curvature history storage for derivative computation
+pub type CurvatureHistory = HashMap<(String, String), Vec<(u64, f64)>>;
+
+/// Maximum history entries per edge (prevents unbounded growth)
+pub const MAX_HISTORY_DEPTH: usize = 100;
 
 #[cfg(test)]
 mod tests {

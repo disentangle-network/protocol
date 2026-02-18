@@ -116,7 +116,7 @@ mod tests {
 
         // All bits should be 1
         let row: Vec<_> = trace.row(0).collect();
-        for bit in row.iter().take(RANGE_BITS) {
+        for bit in &row[..RANGE_BITS] {
             assert_eq!(*bit, BabyBear::one());
         }
     }
@@ -128,7 +128,7 @@ mod tests {
 
         // All bits should be 0
         let row: Vec<_> = trace.row(0).collect();
-        for bit in row.iter().take(RANGE_BITS) {
+        for bit in &row[..RANGE_BITS] {
             assert_eq!(*bit, BabyBear::zero());
         }
 
@@ -145,7 +145,7 @@ mod tests {
 
         let row: Vec<_> = trace.row(0).collect();
         // Only bit 8 should be set
-        for (i, bit) in row.iter().enumerate().take(RANGE_BITS) {
+        for (i, bit) in row[..RANGE_BITS].iter().enumerate() {
             if i == 8 {
                 assert_eq!(*bit, BabyBear::one());
             } else {

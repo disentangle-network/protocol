@@ -29,14 +29,17 @@ pub mod transactions;
 // Re-export main types
 pub use agreement::{
     AgreementStatus, AgreementTerms, CoherenceEffect, ResourceReceipt, ResourceType,
-    SettlementAgreement,
+    ServiceAgreement, SettlementAgreement,
 };
 pub use capability::{
     AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, Constraint,
     ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
     TransactionScope,
 };
-pub use coherence::{CoherenceProfile, COHERENCE_HALF_LIFE};
+pub use coherence::{
+    CoherenceGradientMap, CoherenceProfile, CurvatureDerivative, CurvatureHistory,
+    ExcitabilityProfile, COHERENCE_HALF_LIFE, MAX_HISTORY_DEPTH,
+};
 pub use did::{
     AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,

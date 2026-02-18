@@ -7,12 +7,13 @@ use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_identity::{
     evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
-    CapabilityId, CapabilitySubject, CoherenceProfile, Constraint, ConstraintContext, DIDDocument,
-    DelegationRecord, DistributionRoot, GovernanceProposal, GovernanceVote, IdentityError,
+    CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, Constraint,
+    ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument, DelegationRecord,
+    DistributionRoot, ExcitabilityProfile, GovernanceProposal, GovernanceVote, IdentityError,
     IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus, IntroductionContext,
     IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal, ProposalResult,
-    ProposalStatus, ProposalType, RegionSelector, RevocationScope, SettlementAgreement,
-    SharedIntent, VoteChoice, DID,
+    ProposalStatus, ProposalType, RegionSelector, RevocationScope, ServiceAgreement,
+    SettlementAgreement, SharedIntent, VoteChoice, DID, MAX_HISTORY_DEPTH,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,6 +55,8 @@ pub struct IdentityStateManager {
     coord_proposals: HashMap<Hash256, Proposal>,
     shared_intents: HashMap<Hash256, SharedIntent>,
     oracle_distributions: HashMap<Hash256, DistributionRoot>,
+    // Excitability gradient tracking
+    curvature_history: CurvatureHistory,
 }
 
 impl Default for IdentityStateManager {
@@ -79,6 +82,7 @@ impl IdentityStateManager {
             coord_proposals: HashMap::new(),
             shared_intents: HashMap::new(),
             oracle_distributions: HashMap::new(),
+            curvature_history: HashMap::new(),
         }
     }
 
@@ -109,6 +113,9 @@ impl IdentityStateManager {
         // Store in registry
         self.did_registry
             .insert(did.0.clone(), (doc.clone(), pk.clone()));
+
+        // Snapshot curvature after graph mutation
+        self.snapshot_curvature(self.current_depth);
 
         Ok((did, doc, sk))
     }
@@ -220,6 +227,9 @@ impl IdentityStateManager {
 
         // Record in identity graph
         self.identity_graph.record_delegation(&record);
+
+        // Snapshot curvature after graph mutation
+        self.snapshot_curvature(self.current_depth);
 
         Ok(record)
     }
@@ -368,6 +378,9 @@ impl IdentityStateManager {
 
         self.identity_graph.record_introduction(&tx);
         self.introduction_history.push(tx); // Store for persistence
+
+        // Snapshot curvature after graph mutation
+        self.snapshot_curvature(self.current_depth);
 
         Ok(())
     }
@@ -624,7 +637,7 @@ impl IdentityStateManager {
         );
         let signature = sign(provider_sk, message.as_bytes());
 
-        let agreement = SettlementAgreement::new(
+        let agreement = ServiceAgreement::new(
             provider_did.to_string(),
             consumer_did.to_string(),
             capability_id.copied(),
@@ -686,6 +699,9 @@ impl IdentityStateManager {
         }
 
         agreement.complete(success, outcome_hash, self.current_depth);
+
+        // Snapshot curvature after agreement completion (affects coherence)
+        self.snapshot_curvature(self.current_depth);
 
         Ok(())
     }
@@ -808,6 +824,10 @@ impl IdentityStateManager {
             if let Some(proposal) = self.coord_proposals.get_mut(proposal_id) {
                 proposal.status = ProposalStatus::Activated { intent_id };
             }
+
+            // Snapshot curvature after proposal activation
+            self.snapshot_curvature(self.current_depth);
+
             Ok(Some(intent_id))
         } else {
             Ok(None)
@@ -1030,6 +1050,9 @@ impl IdentityStateManager {
             contributed_capabilities: capabilities,
         });
 
+        // Snapshot curvature after participant joins intent
+        self.snapshot_curvature(self.current_depth);
+
         Ok(())
     }
 
@@ -1210,6 +1233,25 @@ impl IdentityStateManager {
             let curvature_end = self.compute_group_member_curvature(did, &dids);
             let curvature_delta = curvature_end - curvature_start;
 
+            // Compute curvature derivative (mean derivative with other DIDs in region)
+            let window = query.depth_end.saturating_sub(query.depth_start);
+            let neighbors = self.get_neighbors(did);
+            let mut derivative_sum = 0.0;
+            let mut derivative_count = 0;
+            for neighbor in &neighbors {
+                if dids.contains(neighbor) {
+                    if let Some(deriv) = self.curvature_derivative(did, neighbor, window) {
+                        derivative_sum += deriv.derivative;
+                        derivative_count += 1;
+                    }
+                }
+            }
+            let curvature_derivative = if derivative_count > 0 {
+                derivative_sum / derivative_count as f64
+            } else {
+                0.0
+            };
+
             // Compute diversity (distinct positive-curvature connections in region)
             let diversity = dids
                 .iter()
@@ -1225,6 +1267,7 @@ impl IdentityStateManager {
                 did: did.clone(),
                 mass_delta,
                 curvature_delta,
+                curvature_derivative,
                 diversity,
                 composite: 0.0,
             };
@@ -1250,6 +1293,213 @@ impl IdentityStateManager {
     /// List all distributions
     pub fn list_oracle_distributions(&self) -> Vec<&DistributionRoot> {
         self.oracle_distributions.values().collect()
+    }
+
+    // Excitability Gradient Methods
+
+    /// Record curvature snapshot for all edges (call after graph mutations)
+    pub fn snapshot_curvature(&mut self, current_depth: u64) {
+        let dids = self.list_dids();
+
+        for i in 0..dids.len() {
+            for j in (i + 1)..dids.len() {
+                if let Some(curvature) = self.get_identity_curvature(&dids[i], &dids[j]) {
+                    // Create sorted key to ensure consistent edge representation
+                    let edge_key = if dids[i] < dids[j] {
+                        (dids[i].clone(), dids[j].clone())
+                    } else {
+                        (dids[j].clone(), dids[i].clone())
+                    };
+
+                    let history = self.curvature_history.entry(edge_key).or_default();
+
+                    // Only add if depth has advanced since last snapshot
+                    if history.is_empty() || history.last().unwrap().0 < current_depth {
+                        history.push((current_depth, curvature));
+
+                        // Cap history size
+                        if history.len() > MAX_HISTORY_DEPTH {
+                            history.remove(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Curvature derivative for a specific edge
+    pub fn curvature_derivative(
+        &self,
+        did_a: &str,
+        did_b: &str,
+        window: u64,
+    ) -> Option<CurvatureDerivative> {
+        // Create sorted key
+        let edge_key = if did_a < did_b {
+            (did_a.to_string(), did_b.to_string())
+        } else {
+            (did_b.to_string(), did_a.to_string())
+        };
+
+        let history = self.curvature_history.get(&edge_key)?;
+
+        if history.len() < 2 {
+            return None;
+        }
+
+        let current = history.last()?;
+        let depth_end = current.0;
+        let kappa_end = current.1;
+
+        // Find entry at or before window start
+        let depth_start = depth_end.saturating_sub(window);
+        let start_entry = history
+            .iter()
+            .rev()
+            .find(|(d, _)| *d <= depth_start)
+            .or_else(|| history.first())?;
+
+        let kappa_start = start_entry.1;
+        let actual_depth_start = start_entry.0;
+
+        let depth_diff = depth_end.saturating_sub(actual_depth_start);
+        let derivative = if depth_diff > 0 {
+            (kappa_end - kappa_start) / depth_diff as f64
+        } else {
+            0.0
+        };
+
+        Some(CurvatureDerivative {
+            did_a: did_a.to_string(),
+            did_b: did_b.to_string(),
+            kappa_start,
+            kappa_end,
+            derivative,
+            depth_start: actual_depth_start,
+            depth_end,
+        })
+    }
+
+    /// Excitability profile for an agent
+    pub fn excitability_profile(&self, did: &str, window: u64) -> Option<ExcitabilityProfile> {
+        let neighbors = self.get_neighbors(did);
+
+        if neighbors.is_empty() {
+            return None;
+        }
+
+        let mut edge_gradients = Vec::new();
+        let mut forming_count = 0u32;
+        let mut degrading_count = 0u32;
+        let mut max_gradient = 0.0f64;
+        let mut sum_gradient = 0.0f64;
+
+        for neighbor in &neighbors {
+            if let Some(derivative) = self.curvature_derivative(did, neighbor, window) {
+                if derivative.derivative > 0.0 {
+                    forming_count += 1;
+                } else if derivative.derivative < 0.0 {
+                    degrading_count += 1;
+                }
+
+                if derivative.derivative.abs() > max_gradient.abs() {
+                    max_gradient = derivative.derivative;
+                }
+
+                sum_gradient += derivative.derivative;
+                edge_gradients.push(derivative);
+            }
+        }
+
+        // Sort by derivative (highest first)
+        edge_gradients.sort_by(|a, b| {
+            b.derivative
+                .partial_cmp(&a.derivative)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mean_gradient = if !edge_gradients.is_empty() {
+            sum_gradient / edge_gradients.len() as f64
+        } else {
+            0.0
+        };
+
+        Some(ExcitabilityProfile {
+            did: did.to_string(),
+            mean_gradient,
+            max_gradient,
+            forming_count,
+            degrading_count,
+            edge_gradients,
+            depth_window: window,
+        })
+    }
+
+    /// Network-level gradient map
+    pub fn coherence_gradient_map(&self, top_n: usize, window: u64) -> CoherenceGradientMap {
+        let mut all_derivatives = Vec::new();
+        let mut agent_profiles = Vec::new();
+
+        let dids = self.list_dids();
+
+        // Collect all edge derivatives
+        for i in 0..dids.len() {
+            for j in (i + 1)..dids.len() {
+                if let Some(derivative) = self.curvature_derivative(&dids[i], &dids[j], window) {
+                    all_derivatives.push(derivative);
+                }
+            }
+        }
+
+        // Collect agent excitability profiles
+        for did in &dids {
+            if let Some(profile) = self.excitability_profile(did, window) {
+                agent_profiles.push(profile);
+            }
+        }
+
+        // Sort derivatives
+        let mut forming_derivatives = all_derivatives.clone();
+        forming_derivatives.retain(|d| d.derivative > 0.0);
+        forming_derivatives.sort_by(|a, b| {
+            b.derivative
+                .partial_cmp(&a.derivative)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        forming_derivatives.truncate(top_n);
+
+        let mut degrading_derivatives = all_derivatives.clone();
+        degrading_derivatives.retain(|d| d.derivative < 0.0);
+        degrading_derivatives.sort_by(|a, b| {
+            a.derivative
+                .partial_cmp(&b.derivative)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        degrading_derivatives.truncate(top_n);
+
+        // Sort agents by mean gradient
+        agent_profiles.sort_by(|a, b| {
+            b.mean_gradient
+                .partial_cmp(&a.mean_gradient)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let most_excitable = agent_profiles.into_iter().take(top_n).collect();
+
+        // Compute network-wide mean gradient
+        let network_gradient = if !all_derivatives.is_empty() {
+            all_derivatives.iter().map(|d| d.derivative).sum::<f64>() / all_derivatives.len() as f64
+        } else {
+            0.0
+        };
+
+        CoherenceGradientMap {
+            forming: forming_derivatives,
+            degrading: degrading_derivatives,
+            most_excitable,
+            network_gradient,
+            depth_window: window,
+            computed_at_depth: self.current_depth,
+        }
     }
 
     // Helper methods
@@ -1452,6 +1702,7 @@ impl IdentityStateManager {
             coord_proposals,
             shared_intents,
             oracle_distributions,
+            curvature_history: HashMap::new(), // Rebuilt on startup
         })
     }
 
