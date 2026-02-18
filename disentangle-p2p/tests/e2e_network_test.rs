@@ -733,28 +733,24 @@ async fn test_request_response_protocol() {
             tokio::select! {
                 event = swarm1.select_next_some() => {
                     if let SwarmEvent::Behaviour(DisentangleBehaviourEvent::RequestResponse(
-                        libp2p::request_response::Event::Message { peer, message }
+                        libp2p::request_response::Event::Message { peer, message: libp2p::request_response::Message::Request { request, channel, .. } }
                     )) = event {
-                        if let libp2p::request_response::Message::Request { request, channel, .. } = message {
-                            println!("Node 1 received request from {}: {:?}", peer, request);
+                        println!("Node 1 received request from {}: {:?}", peer, request);
 
-                            // Send response
-                            let tips = vec![[0u8; 32], [1u8; 32]];
-                            let _ = swarm1.behaviour_mut().request_response.send_response(
-                                channel,
-                                DisentangleResponse::Tips(tips)
-                            );
-                        }
+                        // Send response
+                        let tips = vec![[0u8; 32], [1u8; 32]];
+                        let _ = swarm1.behaviour_mut().request_response.send_response(
+                            channel,
+                            DisentangleResponse::Tips(tips)
+                        );
                     }
                 }
                 event = swarm2.select_next_some() => {
                     if let SwarmEvent::Behaviour(DisentangleBehaviourEvent::RequestResponse(
-                        libp2p::request_response::Event::Message { message, .. }
+                        libp2p::request_response::Event::Message { message: libp2p::request_response::Message::Response { response, .. }, .. }
                     )) = event {
-                        if let libp2p::request_response::Message::Response { response, .. } = message {
-                            println!("Node 2 received response: {:?}", response);
-                            return response;
-                        }
+                        println!("Node 2 received response: {:?}", response);
+                        return response;
                     }
                 }
             }

@@ -1447,14 +1447,14 @@ async fn test_combined_delegation_and_coherence_constraint() {
     let did_isolated = resp_isolated["did"].as_str().unwrap().to_string();
 
     // Build introduction graph: hub introduces all mesh agents
-    for i in 0..mesh_dids.len() {
+    for mesh_did in &mesh_dids {
         let (status, _) = post_json(
             &router,
             "/introduction",
             json!({
                 "introducer_did": did_hub,
                 "introducer_sk_hex": sk_hub,
-                "introduced_did": mesh_dids[i],
+                "introduced_did": mesh_did,
                 "edge_name": "Colleague"
             }),
         )
