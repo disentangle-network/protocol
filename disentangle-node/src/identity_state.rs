@@ -1182,7 +1182,12 @@ impl IdentityStateManager {
 
     // Oracle Operations
 
-    /// Compute distribution for an oracle query
+    /// Compute distribution for an oracle query.
+    ///
+    /// Implements paper Definition 5 (eq. 6):
+    ///   a(i) = R * max(0, meangrad(i)) / sum_k max(0, meangrad(k))
+    ///
+    /// With eligibility filter: A_elig = {i : topomass(i) >= theta_min}
     pub fn compute_oracle_distribution(
         &mut self,
         query: OracleQuery,
@@ -1204,10 +1209,9 @@ impl IdentityStateManager {
             RegionSelector::Global => self.did_registry.keys().cloned().collect(),
         };
 
-        // Compute scores for each agent
+        // Compute scores for each eligible agent
         let mut scores = HashMap::new();
         for did in &dids {
-            // Compute mass delta over window
             let did_obj = DID(did.clone());
             let first_seen = self
                 .first_seen
@@ -1215,6 +1219,7 @@ impl IdentityStateManager {
                 .copied()
                 .unwrap_or(query.depth_start);
 
+            // Compute coherence profiles for mass delta (diagnostic)
             let profile_start = CoherenceProfile::compute(
                 &did_obj,
                 &self.identity_graph,
@@ -1228,15 +1233,19 @@ impl IdentityStateManager {
                 query.depth_end,
             );
 
+            // Eligibility filter: topomass >= min_coherence (paper's theta_min)
+            if query.min_coherence > 0.0 {
+                let topomass = profile_end.topological_mass as f64;
+                if topomass < query.min_coherence {
+                    continue;
+                }
+            }
+
             let mass_delta =
                 profile_end.topological_mass as f64 - profile_start.topological_mass as f64;
 
-            // Compute curvature delta (mean curvature with other DIDs in region)
-            let curvature_start = self.compute_group_member_curvature(did, &dids);
-            let curvature_end = self.compute_group_member_curvature(did, &dids);
-            let curvature_delta = curvature_end - curvature_start;
-
-            // Compute curvature derivative (mean derivative with other DIDs in region)
+            // Compute meangrad: mean curvature derivative across neighbors in region
+            // Paper Definition 4: meangrad(i) = (1/|N(i)|) * sum_{j in N(i)} d_kappa/dd
             let window = query.depth_end.saturating_sub(query.depth_start);
             let neighbors = self.get_neighbors(did);
             let mut derivative_sum = 0.0;
@@ -1255,7 +1264,7 @@ impl IdentityStateManager {
                 0.0
             };
 
-            // Compute diversity (distinct positive-curvature connections in region)
+            // Diversity: distinct positive-curvature connections in region (diagnostic)
             let diversity = dids
                 .iter()
                 .filter(|other| *other != did)
@@ -1269,7 +1278,6 @@ impl IdentityStateManager {
             let mut score = AgentScore {
                 did: did.clone(),
                 mass_delta,
-                curvature_delta,
                 curvature_derivative,
                 diversity,
                 composite: 0.0,
@@ -1636,21 +1644,6 @@ impl IdentityStateManager {
             curvature_sum / edge_count as f64
         } else {
             0.0
-        }
-    }
-
-    /// Compute mean curvature between a DID and a group
-    fn compute_group_member_curvature(&self, did: &str, group: &[String]) -> f64 {
-        let curvatures: Vec<f64> = group
-            .iter()
-            .filter(|other| *other != did)
-            .filter_map(|other| self.get_identity_curvature(did, other))
-            .collect();
-
-        if curvatures.is_empty() {
-            0.0
-        } else {
-            curvatures.iter().sum::<f64>() / curvatures.len() as f64
         }
     }
 
