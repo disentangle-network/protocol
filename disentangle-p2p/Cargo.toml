@@ -42,7 +42,7 @@ hex.workspace = true
 chacha20poly1305 = "0.10"
 rand.workspace = true
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 ctrlc = "3.4"
 
 [[bin]]
