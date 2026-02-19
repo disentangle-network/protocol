@@ -41,6 +41,13 @@ struct SerializableState {
     commons_pools: Vec<CommonsPool>,
 }
 
+/// A pending payload queued by a local RPC operation for federation broadcast.
+/// The node's main loop drains these, wraps them in DAG transactions, and gossips.
+pub struct PendingPayload {
+    pub payload: TransactionPayload,
+    pub signer_pk: VerifyingKey,
+}
+
 pub struct IdentityStateManager {
     did_registry: HashMap<String, (DIDDocument, VerifyingKey)>,
     capability_store: HashMap<CapabilityId, Capability>,
@@ -60,6 +67,10 @@ pub struct IdentityStateManager {
     commons_pools: HashMap<Hash256, CommonsPool>,
     // Excitability gradient tracking
     curvature_history: CurvatureHistory,
+    // Federation: payloads queued by local RPC operations for DAG broadcast.
+    // Drained by the node's main loop. apply_payload() does NOT queue here
+    // (preventing infinite gossip loops).
+    pending_payloads: Vec<PendingPayload>,
 }
 
 impl Default for IdentityStateManager {
@@ -87,7 +98,14 @@ impl IdentityStateManager {
             oracle_distributions: HashMap::new(),
             commons_pools: HashMap::new(),
             curvature_history: HashMap::new(),
+            pending_payloads: Vec::new(),
         }
+    }
+
+    /// Drain all pending payloads queued by local RPC operations.
+    /// Called by the node's main loop to create DAG transactions and gossip.
+    pub fn drain_payloads(&mut self) -> Vec<PendingPayload> {
+        std::mem::take(&mut self.pending_payloads)
     }
 
     // DID Operations
@@ -121,6 +139,16 @@ impl IdentityStateManager {
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
 
+        // Queue payload for federation broadcast
+        if let Ok(doc_bytes) = bincode::serialize(&doc) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::RegisterIdentity {
+                    did_document: doc_bytes,
+                },
+                signer_pk: pk,
+            });
+        }
+
         Ok((did, doc, sk))
     }
 
@@ -142,6 +170,16 @@ impl IdentityStateManager {
 
         // TODO: Verify proof in Phase 2
         // For Phase 1, we trust the proof parameter
+
+        // Queue payload for federation broadcast BEFORE removing from registry
+        if let Some((_, pk)) = self.did_registry.get(did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::DeactivateIdentity {
+                    did: did.to_string(),
+                },
+                signer_pk: pk.clone(),
+            });
+        }
 
         self.did_registry.remove(did);
         Ok(())
@@ -174,6 +212,18 @@ impl IdentityStateManager {
         cap.id = cap.compute_id();
 
         self.capability_store.insert(cap.id, cap.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(issuer_did) {
+            if let Ok(cap_bytes) = bincode::serialize(&cap) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::CreateCapability {
+                        capability: cap_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(cap)
     }
@@ -234,6 +284,20 @@ impl IdentityStateManager {
 
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(delegator_did) {
+            if let Ok(delegation_bytes) = bincode::serialize(&record) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::DelegateCapability {
+                        cap_id: *cap_id,
+                        to_did: delegatee_did.to_string(),
+                        delegation: delegation_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(record)
     }
@@ -318,7 +382,23 @@ impl IdentityStateManager {
             ));
         }
 
-        self.identity_graph.record_revocation(cap_id, scope);
+        self.identity_graph.record_revocation(cap_id, scope.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(revoker_did) {
+            let scope_str = match scope {
+                RevocationScope::Single => "single".to_string(),
+                RevocationScope::Subtree => "subtree".to_string(),
+                RevocationScope::All => "all".to_string(),
+            };
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::RevokeCapability {
+                    cap_id: *cap_id,
+                    scope: scope_str,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
 
         Ok(())
     }
@@ -385,6 +465,19 @@ impl IdentityStateManager {
 
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
+
+        // Queue payload for federation broadcast
+        if let Some((_, introducer_pk)) = self.did_registry.get(introducer_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::Introduce {
+                    from_did: introducer_did.to_string(),
+                    to_did: introduced_did.to_string(),
+                    edge_name: edge_name.to_string(),
+                    context: "direct".to_string(),
+                },
+                signer_pk: introducer_pk.clone(),
+            });
+        }
 
         Ok(())
     }
@@ -464,7 +557,20 @@ impl IdentityStateManager {
     pub fn set_petname(&mut self, name: &str, did: &str) -> Result<(), IdentityError> {
         let did_obj = DID(did.to_string());
         self.petnames
-            .bind(name, &did_obj, vec![], self.current_depth)
+            .bind(name, &did_obj, vec![], self.current_depth)?;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::SetPetname {
+                    name: name.to_string(),
+                    target_did: did.to_string(),
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Resolve a petname to a DID
@@ -520,6 +626,18 @@ impl IdentityStateManager {
 
         self.proposals.insert(proposal.id, proposal.clone());
 
+        // Queue payload for federation broadcast
+        if let Ok(prop_bytes) = bincode::serialize(&proposal) {
+            if let Some((_, pk)) = self.did_registry.get(proposer_did) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::Propose {
+                        proposal: prop_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
+
         Ok(proposal)
     }
 
@@ -572,6 +690,19 @@ impl IdentityStateManager {
         };
 
         self.votes.push(gov_vote.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(voter_did) {
+            if let Ok(vote_bytes) = bincode::serialize(&gov_vote) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::Vote {
+                        proposal_id: *proposal_id,
+                        vote: vote_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(gov_vote)
     }
@@ -1321,13 +1452,22 @@ impl IdentityStateManager {
         }
 
         let pool = CommonsPool::new(
-            name,
-            description,
+            name.clone(),
+            description.clone(),
             creator_did.to_string(),
             self.current_depth,
         );
         let pool_id = pool.id;
         self.commons_pools.insert(pool_id, pool);
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(creator_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::CreatePool { name, description },
+                signer_pk: pk.clone(),
+            });
+        }
+
         Ok(pool_id)
     }
 
@@ -1351,10 +1491,24 @@ impl IdentityStateManager {
         pool.deposit(
             depositor_did.to_string(),
             amount,
-            source,
+            source.clone(),
             self.current_depth,
         );
-        Ok(pool.balance)
+        let balance = pool.balance;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(depositor_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolDeposit {
+                    pool_id: *pool_id,
+                    amount,
+                    source,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(balance)
     }
 
     /// Distribute pool funds using an oracle distribution
@@ -1379,6 +1533,18 @@ impl IdentityStateManager {
         let allocations = pool.distribute(*distribution_id, &weights, self.current_depth);
         let remaining = pool.balance;
 
+        // Queue payload for federation broadcast
+        // Use any registered pk as signer (distribution is a system-level operation)
+        if let Some((_, pk)) = self.did_registry.values().next() {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolDistribute {
+                    pool_id: *pool_id,
+                    distribution_id: *distribution_id,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
         Ok((allocations, remaining))
     }
 
@@ -1398,10 +1564,24 @@ impl IdentityStateManager {
             .get_mut(pool_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
 
-        pool.claim(claimant_did, *distribution_id, self.current_depth)
+        let claimed = pool
+            .claim(claimant_did, *distribution_id, self.current_depth)
             .ok_or_else(|| {
                 IdentityError::ConstraintNotSatisfied("No allocation for claimant".to_string())
-            })
+            })?;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(claimant_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolClaim {
+                    pool_id: *pool_id,
+                    distribution_id: *distribution_id,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(claimed)
     }
 
     /// Get a pool by ID
@@ -2083,6 +2263,7 @@ impl IdentityStateManager {
             oracle_distributions,
             commons_pools,
             curvature_history: HashMap::new(), // Rebuilt on startup
+            pending_payloads: Vec::new(),
         })
     }
 
@@ -2946,5 +3127,131 @@ mod tests {
             deserialized2.payload,
             Some(TransactionPayload::Heartbeat)
         ));
+    }
+
+    // -- Phase 2c: payload queuing tests --
+
+    #[test]
+    fn test_register_did_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+        assert!(manager.drain_payloads().is_empty());
+
+        manager.register_did(AgentType::Human).unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            payloads[0].payload,
+            TransactionPayload::RegisterIdentity { .. }
+        ));
+
+        // Drain again -- should be empty
+        assert!(manager.drain_payloads().is_empty());
+    }
+
+    #[test]
+    fn test_introduce_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_a, _, sk_a) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, _) = manager.register_did(AgentType::Human).unwrap();
+        manager.drain_payloads(); // clear registration payloads
+
+        manager
+            .introduce(&did_a.0, &sk_a, &did_b.0, "collab")
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        match &payloads[0].payload {
+            TransactionPayload::Introduce {
+                from_did, to_did, ..
+            } => {
+                assert_eq!(from_did, &did_a.0);
+                assert_eq!(to_did, &did_b.0);
+            }
+            _ => panic!("Expected Introduce payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_proposal_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (_, _, sk) = manager.register_did(AgentType::Human).unwrap();
+        let did_str = manager.list_dids()[0].clone();
+        manager.drain_payloads();
+
+        manager
+            .create_proposal(
+                &did_str,
+                &sk,
+                ProposalType::ProtocolParameter {
+                    parameter: "test".to_string(),
+                    new_value: b"value".to_vec(),
+                },
+                "Test proposal",
+                100,
+            )
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            payloads[0].payload,
+            TransactionPayload::Propose { .. }
+        ));
+    }
+
+    #[test]
+    fn test_create_pool_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (_, _, _) = manager.register_did(AgentType::Human).unwrap();
+        let did_str = manager.list_dids()[0].clone();
+        manager.drain_payloads();
+
+        manager
+            .create_pool("Test Pool".to_string(), "desc".to_string(), &did_str)
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        match &payloads[0].payload {
+            TransactionPayload::CreatePool { name, .. } => {
+                assert_eq!(name, "Test Pool");
+            }
+            _ => panic!("Expected CreatePool payload"),
+        }
+    }
+
+    #[test]
+    fn test_payload_roundtrip_register_then_apply() {
+        // Validate the full federation pattern:
+        // 1. Node A registers a DID (queues payload)
+        // 2. Payload is extracted
+        // 3. Node B applies the payload (simulating gossip receipt)
+        // 4. Both nodes have the same DID registered
+        let mut node_a = IdentityStateManager::new();
+        let mut node_b = IdentityStateManager::new();
+
+        // Node A registers
+        let (did, _, _) = node_a.register_did(AgentType::Human).unwrap();
+
+        // Extract the queued payload
+        let payloads = node_a.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+
+        // Node B applies the payload
+        let tx_id = [99u8; 32];
+        let result = node_b.apply_payload(&payloads[0].payload, &tx_id, &payloads[0].signer_pk, 10);
+        assert!(result.is_ok());
+
+        // Both nodes have the same DID
+        assert!(node_a.get_did_document(&did.0).is_some());
+        assert!(node_b.get_did_document(&did.0).is_some());
+
+        // Node B should NOT have queued any payloads (apply_payload doesn't queue)
+        assert!(node_b.drain_payloads().is_empty());
     }
 }
