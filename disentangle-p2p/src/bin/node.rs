@@ -549,10 +549,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(identity_rpc::governance_get_proposal_handler),
         )
         // Oracle endpoints
-        .route(
-            "/oracle/query",
-            post(identity_rpc::oracle_query_handler),
-        )
+        .route("/oracle/query", post(identity_rpc::oracle_query_handler))
         .route(
             "/oracle/distribution/:distribution_id_hex",
             get(identity_rpc::oracle_get_distribution_handler),
@@ -562,26 +559,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(identity_rpc::oracle_list_distributions_handler),
         )
         // Pool endpoints
-        .route(
-            "/pool/create",
-            post(identity_rpc::pool_create_handler),
-        )
-        .route(
-            "/pool/deposit",
-            post(identity_rpc::pool_deposit_handler),
-        )
+        .route("/pool/create", post(identity_rpc::pool_create_handler))
+        .route("/pool/deposit", post(identity_rpc::pool_deposit_handler))
         .route(
             "/pool/distribute",
             post(identity_rpc::pool_distribute_handler),
         )
-        .route(
-            "/pool/claim",
-            post(identity_rpc::pool_claim_handler),
-        )
-        .route(
-            "/pool/:pool_id_hex",
-            get(identity_rpc::pool_get_handler),
-        )
+        .route("/pool/claim", post(identity_rpc::pool_claim_handler))
+        .route("/pool/:pool_id_hex", get(identity_rpc::pool_get_handler))
         .route(
             "/pool/:pool_id_hex/claims",
             get(identity_rpc::pool_claims_list_handler),

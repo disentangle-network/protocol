@@ -160,11 +160,21 @@ mod tests {
             100,
         );
 
-        pool.deposit("did:disentangle:alice".to_string(), 100.0, "grant".to_string(), 101);
+        pool.deposit(
+            "did:disentangle:alice".to_string(),
+            100.0,
+            "grant".to_string(),
+            101,
+        );
         assert_eq!(pool.balance, 100.0);
         assert_eq!(pool.deposits.len(), 1);
 
-        pool.deposit("did:disentangle:bob".to_string(), 50.0, "donation".to_string(), 102);
+        pool.deposit(
+            "did:disentangle:bob".to_string(),
+            50.0,
+            "donation".to_string(),
+            102,
+        );
         assert_eq!(pool.balance, 150.0);
         assert_eq!(pool.deposits.len(), 2);
     }
@@ -178,7 +188,12 @@ mod tests {
             100,
         );
 
-        pool.deposit("did:disentangle:funder".to_string(), 100.0, "".to_string(), 101);
+        pool.deposit(
+            "did:disentangle:funder".to_string(),
+            100.0,
+            "".to_string(),
+            101,
+        );
 
         let mut weights = std::collections::HashMap::new();
         weights.insert("did:disentangle:alice".to_string(), 0.6);
@@ -202,7 +217,12 @@ mod tests {
             100,
         );
 
-        pool.deposit("did:disentangle:funder".to_string(), 100.0, "".to_string(), 101);
+        pool.deposit(
+            "did:disentangle:funder".to_string(),
+            100.0,
+            "".to_string(),
+            101,
+        );
 
         let mut weights = std::collections::HashMap::new();
         weights.insert("did:disentangle:alice".to_string(), 0.6);
@@ -255,8 +275,18 @@ mod tests {
         );
 
         // Multiple deposits
-        pool.deposit("did:disentangle:sponsor1".to_string(), 500.0, "initial".to_string(), 1001);
-        pool.deposit("did:disentangle:sponsor2".to_string(), 500.0, "initial".to_string(), 1002);
+        pool.deposit(
+            "did:disentangle:sponsor1".to_string(),
+            500.0,
+            "initial".to_string(),
+            1001,
+        );
+        pool.deposit(
+            "did:disentangle:sponsor2".to_string(),
+            500.0,
+            "initial".to_string(),
+            1002,
+        );
         assert_eq!(pool.balance, 1000.0);
 
         // Distribute based on oracle weights
@@ -275,7 +305,11 @@ mod tests {
         assert!(pool.balance.abs() < 0.001);
 
         // Workers claim
-        for worker in &["did:disentangle:worker1", "did:disentangle:worker2", "did:disentangle:worker3"] {
+        for worker in &[
+            "did:disentangle:worker1",
+            "did:disentangle:worker2",
+            "did:disentangle:worker3",
+        ] {
             let claimed = pool.claim(worker, dist_id, 2001);
             assert!(claimed.is_some());
         }

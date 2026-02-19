@@ -41,6 +41,7 @@ pub use coherence::{
     CoherenceGradientMap, CoherenceProfile, CurvatureDerivative, CurvatureHistory,
     ExcitabilityProfile, COHERENCE_HALF_LIFE, MAX_HISTORY_DEPTH,
 };
+pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use did::{
     AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,
@@ -51,7 +52,6 @@ pub use governance::{
 };
 pub use graph::IdentityGraph;
 pub use intent::{IntentCoherenceSnapshot, IntentParticipant, IntentStatus, SharedIntent};
-pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use oracle::{AgentScore, DistributionRoot, OracleQuery, RegionSelector};
 pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
 pub use proposal::{JoinCommitment, Proposal, ProposalStatus};

@@ -1311,7 +1311,12 @@ impl IdentityStateManager {
             return Err(IdentityError::DIDNotFound(creator_did.to_string()));
         }
 
-        let pool = CommonsPool::new(name, description, creator_did.to_string(), self.current_depth);
+        let pool = CommonsPool::new(
+            name,
+            description,
+            creator_did.to_string(),
+            self.current_depth,
+        );
         let pool_id = pool.id;
         self.commons_pools.insert(pool_id, pool);
         Ok(pool_id)
@@ -1334,7 +1339,12 @@ impl IdentityStateManager {
             .get_mut(pool_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
 
-        pool.deposit(depositor_did.to_string(), amount, source, self.current_depth);
+        pool.deposit(
+            depositor_did.to_string(),
+            amount,
+            source,
+            self.current_depth,
+        );
         Ok(pool.balance)
     }
 
@@ -2409,10 +2419,7 @@ mod tests {
         manager.introduce(&did_a.0, &sk_a, &did_b.0, "B").unwrap();
 
         let query = disentangle_identity::OracleQuery::new(
-            disentangle_identity::RegionSelector::Explicit(vec![
-                did_a.0.clone(),
-                did_b.0.clone(),
-            ]),
+            disentangle_identity::RegionSelector::Explicit(vec![did_a.0.clone(), did_b.0.clone()]),
             0,
             0,
         );
@@ -2471,11 +2478,7 @@ mod tests {
 
         // Create pool and deposit
         let pool_id = manager
-            .create_pool(
-                "Community Fund".to_string(),
-                "".to_string(),
-                &did_a.0,
-            )
+            .create_pool("Community Fund".to_string(), "".to_string(), &did_a.0)
             .unwrap();
 
         manager
