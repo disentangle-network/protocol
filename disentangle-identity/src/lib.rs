@@ -17,6 +17,7 @@
 pub mod agreement;
 pub mod capability;
 pub mod coherence;
+pub mod commons_pool;
 pub mod did;
 pub mod governance;
 pub mod graph;
@@ -40,6 +41,7 @@ pub use coherence::{
     CoherenceGradientMap, CoherenceProfile, CurvatureDerivative, CurvatureHistory,
     ExcitabilityProfile, COHERENCE_HALF_LIFE, MAX_HISTORY_DEPTH,
 };
+pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use did::{
     AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,

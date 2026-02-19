@@ -7,13 +7,13 @@ use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_identity::{
     evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
-    CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, Constraint,
-    ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument, DelegationRecord,
-    DistributionRoot, ExcitabilityProfile, GovernanceProposal, GovernanceVote, IdentityError,
-    IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus, IntroductionContext,
-    IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal, ProposalResult,
-    ProposalStatus, ProposalType, RegionSelector, RevocationScope, ServiceAgreement,
-    SettlementAgreement, SharedIntent, VoteChoice, DID, MAX_HISTORY_DEPTH,
+    CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, CommonsPool,
+    Constraint, ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument,
+    DelegationRecord, DistributionRoot, ExcitabilityProfile, GovernanceProposal, GovernanceVote,
+    IdentityError, IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus,
+    IntroductionContext, IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal,
+    ProposalResult, ProposalStatus, ProposalType, RegionSelector, RevocationScope,
+    ServiceAgreement, SettlementAgreement, SharedIntent, VoteChoice, DID, MAX_HISTORY_DEPTH,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ struct SerializableState {
     coord_proposals: Vec<Proposal>,
     shared_intents: Vec<SharedIntent>,
     oracle_distributions: Vec<DistributionRoot>,
+    commons_pools: Vec<CommonsPool>,
 }
 
 pub struct IdentityStateManager {
@@ -55,6 +56,7 @@ pub struct IdentityStateManager {
     coord_proposals: HashMap<Hash256, Proposal>,
     shared_intents: HashMap<Hash256, SharedIntent>,
     oracle_distributions: HashMap<Hash256, DistributionRoot>,
+    commons_pools: HashMap<Hash256, CommonsPool>,
     // Excitability gradient tracking
     curvature_history: CurvatureHistory,
 }
@@ -82,6 +84,7 @@ impl IdentityStateManager {
             coord_proposals: HashMap::new(),
             shared_intents: HashMap::new(),
             oracle_distributions: HashMap::new(),
+            commons_pools: HashMap::new(),
             curvature_history: HashMap::new(),
         }
     }
@@ -1295,6 +1298,113 @@ impl IdentityStateManager {
         self.oracle_distributions.values().collect()
     }
 
+    // CommonsPool Operations
+
+    /// Create a new commons pool
+    pub fn create_pool(
+        &mut self,
+        name: String,
+        description: String,
+        creator_did: &str,
+    ) -> Result<Hash256, IdentityError> {
+        if !self.did_registry.contains_key(creator_did) {
+            return Err(IdentityError::DIDNotFound(creator_did.to_string()));
+        }
+
+        let pool = CommonsPool::new(
+            name,
+            description,
+            creator_did.to_string(),
+            self.current_depth,
+        );
+        let pool_id = pool.id;
+        self.commons_pools.insert(pool_id, pool);
+        Ok(pool_id)
+    }
+
+    /// Deposit value into a pool
+    pub fn pool_deposit(
+        &mut self,
+        pool_id: &Hash256,
+        depositor_did: &str,
+        amount: f64,
+        source: String,
+    ) -> Result<f64, IdentityError> {
+        if !self.did_registry.contains_key(depositor_did) {
+            return Err(IdentityError::DIDNotFound(depositor_did.to_string()));
+        }
+
+        let pool = self
+            .commons_pools
+            .get_mut(pool_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
+
+        pool.deposit(
+            depositor_did.to_string(),
+            amount,
+            source,
+            self.current_depth,
+        );
+        Ok(pool.balance)
+    }
+
+    /// Distribute pool funds using an oracle distribution
+    pub fn pool_distribute(
+        &mut self,
+        pool_id: &Hash256,
+        distribution_id: &Hash256,
+    ) -> Result<(std::collections::HashMap<String, f64>, f64), IdentityError> {
+        let weights = {
+            let distribution = self
+                .oracle_distributions
+                .get(distribution_id)
+                .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(distribution_id)))?;
+            distribution.weights.clone()
+        };
+
+        let pool = self
+            .commons_pools
+            .get_mut(pool_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
+
+        let allocations = pool.distribute(*distribution_id, &weights, self.current_depth);
+        let remaining = pool.balance;
+
+        Ok((allocations, remaining))
+    }
+
+    /// Claim an allocation from a pool
+    pub fn pool_claim(
+        &mut self,
+        pool_id: &Hash256,
+        distribution_id: &Hash256,
+        claimant_did: &str,
+    ) -> Result<f64, IdentityError> {
+        if !self.did_registry.contains_key(claimant_did) {
+            return Err(IdentityError::DIDNotFound(claimant_did.to_string()));
+        }
+
+        let pool = self
+            .commons_pools
+            .get_mut(pool_id)
+            .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
+
+        pool.claim(claimant_did, *distribution_id, self.current_depth)
+            .ok_or_else(|| {
+                IdentityError::ConstraintNotSatisfied("No allocation for claimant".to_string())
+            })
+    }
+
+    /// Get a pool by ID
+    pub fn get_pool(&self, pool_id: &Hash256) -> Option<&CommonsPool> {
+        self.commons_pools.get(pool_id)
+    }
+
+    /// List all pools
+    pub fn list_pools(&self) -> Vec<&CommonsPool> {
+        self.commons_pools.values().collect()
+    }
+
     // Excitability Gradient Methods
 
     /// Record curvature snapshot for all edges (call after graph mutations)
@@ -1575,6 +1685,7 @@ impl IdentityStateManager {
         let shared_intents: Vec<SharedIntent> = self.shared_intents.values().cloned().collect();
         let oracle_distributions: Vec<DistributionRoot> =
             self.oracle_distributions.values().cloned().collect();
+        let commons_pools: Vec<CommonsPool> = self.commons_pools.values().cloned().collect();
 
         let state = SerializableState {
             did_registry_keys,
@@ -1591,6 +1702,7 @@ impl IdentityStateManager {
             coord_proposals,
             shared_intents,
             oracle_distributions,
+            commons_pools,
         };
 
         let json = serde_json::to_string_pretty(&state)
@@ -1687,6 +1799,12 @@ impl IdentityStateManager {
             oracle_distributions.insert(distribution.query_id, distribution);
         }
 
+        // Reconstruct commons pools
+        let mut commons_pools = HashMap::new();
+        for pool in state.commons_pools {
+            commons_pools.insert(pool.id, pool);
+        }
+
         Ok(Self {
             did_registry,
             capability_store,
@@ -1702,6 +1820,7 @@ impl IdentityStateManager {
             coord_proposals,
             shared_intents,
             oracle_distributions,
+            commons_pools,
             curvature_history: HashMap::new(), // Rebuilt on startup
         })
     }
@@ -2239,5 +2358,175 @@ mod tests {
         let other_agreements = manager.list_agreements_for_did(&did_other.0);
         assert_eq!(other_agreements.len(), 1);
         assert_eq!(other_agreements[0].id, agreement_id2);
+    }
+
+    #[test]
+    fn test_oracle_distribution_lifecycle() {
+        let mut manager = IdentityStateManager::new();
+
+        // Create agents with shared connections for positive curvature
+        let (did_a, _, sk_a) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, sk_b) = manager.register_did(AgentType::Human).unwrap();
+        let (did_c, _, _sk_c) = manager.register_did(AgentType::Human).unwrap();
+
+        // Create triangle: A-B, A-C, B-C
+        manager.introduce(&did_a.0, &sk_a, &did_b.0, "B").unwrap();
+        manager.introduce(&did_a.0, &sk_a, &did_c.0, "C").unwrap();
+        manager.introduce(&did_b.0, &sk_b, &did_c.0, "C").unwrap();
+
+        // Advance depth to create a window
+        for _ in 0..10 {
+            manager.advance_depth();
+        }
+
+        // Query oracle for global distribution
+        let query = disentangle_identity::OracleQuery::new(
+            disentangle_identity::RegionSelector::Global,
+            0,
+            10,
+        );
+
+        let dist_id = manager.compute_oracle_distribution(query).unwrap();
+
+        // Retrieve distribution
+        let distribution = manager.get_oracle_distribution(&dist_id).unwrap();
+        assert_eq!(distribution.depth_window, (0, 10));
+
+        // Weights should sum to 1.0
+        let weight_sum: f64 = distribution.weights.values().sum();
+        assert!(
+            (weight_sum - 1.0).abs() < 0.001,
+            "Weights should sum to 1.0, got {}",
+            weight_sum
+        );
+
+        // All three agents should have weights
+        assert_eq!(distribution.weights.len(), 3);
+
+        // List distributions
+        let all_dists = manager.list_oracle_distributions();
+        assert_eq!(all_dists.len(), 1);
+    }
+
+    #[test]
+    fn test_oracle_explicit_region() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_a, _, sk_a) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, _sk_b) = manager.register_did(AgentType::Human).unwrap();
+        let (did_c, _, _sk_c) = manager.register_did(AgentType::Human).unwrap();
+
+        manager.introduce(&did_a.0, &sk_a, &did_b.0, "B").unwrap();
+
+        let query = disentangle_identity::OracleQuery::new(
+            disentangle_identity::RegionSelector::Explicit(vec![did_a.0.clone(), did_b.0.clone()]),
+            0,
+            0,
+        );
+
+        let dist_id = manager.compute_oracle_distribution(query).unwrap();
+        let distribution = manager.get_oracle_distribution(&dist_id).unwrap();
+
+        // Only A and B should be in the distribution (not C)
+        assert_eq!(distribution.weights.len(), 2);
+        assert!(distribution.weights.contains_key(&did_a.0));
+        assert!(distribution.weights.contains_key(&did_b.0));
+        assert!(!distribution.weights.contains_key(&did_c.0));
+    }
+
+    #[test]
+    fn test_pool_create_and_deposit() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_creator, _, _sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // Create pool
+        let pool_id = manager
+            .create_pool(
+                "Test Fund".to_string(),
+                "A test fund".to_string(),
+                &did_creator.0,
+            )
+            .unwrap();
+
+        let pool = manager.get_pool(&pool_id).unwrap();
+        assert_eq!(pool.name, "Test Fund");
+        assert_eq!(pool.balance, 0.0);
+
+        // Deposit
+        let new_balance = manager
+            .pool_deposit(&pool_id, &did_creator.0, 1000.0, "initial".to_string())
+            .unwrap();
+        assert_eq!(new_balance, 1000.0);
+
+        let pool = manager.get_pool(&pool_id).unwrap();
+        assert_eq!(pool.deposits.len(), 1);
+    }
+
+    #[test]
+    fn test_pool_full_lifecycle() {
+        let mut manager = IdentityStateManager::new();
+
+        // Create agents with connections
+        let (did_a, _, sk_a) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, sk_b) = manager.register_did(AgentType::Human).unwrap();
+        let (did_c, _, _sk_c) = manager.register_did(AgentType::Human).unwrap();
+
+        manager.introduce(&did_a.0, &sk_a, &did_b.0, "B").unwrap();
+        manager.introduce(&did_a.0, &sk_a, &did_c.0, "C").unwrap();
+        manager.introduce(&did_b.0, &sk_b, &did_c.0, "C").unwrap();
+
+        // Create pool and deposit
+        let pool_id = manager
+            .create_pool("Community Fund".to_string(), "".to_string(), &did_a.0)
+            .unwrap();
+
+        manager
+            .pool_deposit(&pool_id, &did_a.0, 300.0, "grant".to_string())
+            .unwrap();
+
+        // Compute oracle distribution
+        let query = disentangle_identity::OracleQuery::new(
+            disentangle_identity::RegionSelector::Global,
+            0,
+            0,
+        );
+        let dist_id = manager.compute_oracle_distribution(query).unwrap();
+
+        // Distribute pool using oracle weights
+        let (allocations, remaining) = manager.pool_distribute(&pool_id, &dist_id).unwrap();
+        assert!(remaining.abs() < 0.001, "Pool should be fully distributed");
+        assert_eq!(allocations.len(), 3);
+
+        let total_allocated: f64 = allocations.values().sum();
+        assert!(
+            (total_allocated - 300.0).abs() < 0.001,
+            "Total allocated should equal deposit"
+        );
+
+        // Each agent claims
+        for did in &[&did_a.0, &did_b.0, &did_c.0] {
+            let amount = manager.pool_claim(&pool_id, &dist_id, did).unwrap();
+            assert!(amount > 0.0);
+        }
+
+        // Double claim should fail
+        let result = manager.pool_claim(&pool_id, &dist_id, &did_a.0);
+        assert!(result.is_err());
+
+        // Verify claims recorded
+        let pool = manager.get_pool(&pool_id).unwrap();
+        assert_eq!(pool.claims.len(), 3);
+    }
+
+    #[test]
+    fn test_pool_nonexistent_errors() {
+        let mut manager = IdentityStateManager::new();
+
+        let fake_id = [0u8; 32];
+
+        // Non-existent pool
+        let result = manager.pool_deposit(&fake_id, "did:fake", 100.0, "".to_string());
+        assert!(result.is_err());
     }
 }

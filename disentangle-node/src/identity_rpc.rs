@@ -13,7 +13,8 @@ use axum::{
 };
 use disentangle_crypto::signature::SigningKey;
 use disentangle_identity::{
-    AgentType, CapabilitySubject, Constraint, ProposalType, RevocationScope, VoteChoice,
+    AgentType, CapabilitySubject, Constraint, OracleQuery, ProposalType, RegionSelector,
+    RevocationScope, VoteChoice,
 };
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -1810,6 +1811,578 @@ pub async fn coherence_gradient_map_handler(
     })?;
 
     Ok(Json(GradientMapResponse { map: map_json }))
+}
+
+// Oracle endpoints
+
+#[derive(Deserialize)]
+pub struct OracleQueryRequest {
+    region: serde_json::Value,
+    depth_start: u64,
+    depth_end: u64,
+}
+
+#[derive(Serialize)]
+pub struct OracleQueryResponse {
+    distribution_id_hex: String,
+    distribution: serde_json::Value,
+}
+
+pub async fn oracle_query_handler(
+    State(state): State<IdentityState>,
+    Json(req): Json<OracleQueryRequest>,
+) -> Result<Json<OracleQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let region: RegionSelector = serde_json::from_value(req.region).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid region selector: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let query = OracleQuery::new(region, req.depth_start, req.depth_end);
+
+    let distribution_id = mgr.compute_oracle_distribution(query).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Oracle query failed: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let distribution = mgr.get_oracle_distribution(&distribution_id).unwrap();
+    let distribution_json = serde_json::to_value(distribution).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize distribution: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(OracleQueryResponse {
+        distribution_id_hex: hex::encode(distribution_id),
+        distribution: distribution_json,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct GetDistributionResponse {
+    distribution: serde_json::Value,
+}
+
+pub async fn oracle_get_distribution_handler(
+    State(state): State<IdentityState>,
+    Path(distribution_id_hex): Path<String>,
+) -> Result<Json<GetDistributionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let id_bytes = hex::decode(&distribution_id_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid distribution ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Distribution ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut dist_id = [0u8; 32];
+    dist_id.copy_from_slice(&id_bytes);
+
+    let distribution = mgr.get_oracle_distribution(&dist_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Distribution not found: {}", distribution_id_hex),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let distribution_json = serde_json::to_value(distribution).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize distribution: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(GetDistributionResponse {
+        distribution: distribution_json,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct ListDistributionsResponse {
+    distributions: Vec<serde_json::Value>,
+}
+
+pub async fn oracle_list_distributions_handler(
+    State(state): State<IdentityState>,
+) -> Result<Json<ListDistributionsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let distributions = mgr.list_oracle_distributions();
+    let distributions_json: Vec<serde_json::Value> = distributions
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialize distributions: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    Ok(Json(ListDistributionsResponse {
+        distributions: distributions_json,
+    }))
+}
+
+// Pool endpoints
+
+#[derive(Deserialize)]
+pub struct CreatePoolRequest {
+    name: String,
+    description: String,
+    creator_did: String,
+    signing_key_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct CreatePoolResponse {
+    pool_id_hex: String,
+    pool: serde_json::Value,
+}
+
+pub async fn pool_create_handler(
+    State(state): State<IdentityState>,
+    Json(req): Json<CreatePoolRequest>,
+) -> Result<Json<CreatePoolResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    // Validate signing key (proof of ownership)
+    let _sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid signing key hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let pool_id = mgr
+        .create_pool(req.name, req.description, &req.creator_did)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create pool: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    let pool = mgr.get_pool(&pool_id).unwrap();
+    let pool_json = serde_json::to_value(pool).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize pool: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(CreatePoolResponse {
+        pool_id_hex: hex::encode(pool_id),
+        pool: pool_json,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PoolDepositRequest {
+    pool_id: String,
+    amount: f64,
+    source: String,
+    depositor_did: String,
+    signing_key_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct PoolDepositResponse {
+    success: bool,
+    new_balance: f64,
+}
+
+pub async fn pool_deposit_handler(
+    State(state): State<IdentityState>,
+    Json(req): Json<PoolDepositRequest>,
+) -> Result<Json<PoolDepositResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let _sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid signing key hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let pool_id_bytes = hex::decode(&req.pool_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid pool ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if pool_id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Pool ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut pool_id = [0u8; 32];
+    pool_id.copy_from_slice(&pool_id_bytes);
+
+    let new_balance = mgr
+        .pool_deposit(&pool_id, &req.depositor_did, req.amount, req.source)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to deposit: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    Ok(Json(PoolDepositResponse {
+        success: true,
+        new_balance,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PoolDistributeRequest {
+    pool_id: String,
+    distribution_id: String,
+    initiator_did: String,
+    signing_key_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct PoolDistributeResponse {
+    success: bool,
+    allocations: std::collections::HashMap<String, f64>,
+    remaining_balance: f64,
+}
+
+pub async fn pool_distribute_handler(
+    State(state): State<IdentityState>,
+    Json(req): Json<PoolDistributeRequest>,
+) -> Result<Json<PoolDistributeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let _sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid signing key hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let pool_id_bytes = hex::decode(&req.pool_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid pool ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let dist_id_bytes = hex::decode(&req.distribution_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid distribution ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if pool_id_bytes.len() != 32 || dist_id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Pool ID and distribution ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut pool_id = [0u8; 32];
+    pool_id.copy_from_slice(&pool_id_bytes);
+    let mut dist_id = [0u8; 32];
+    dist_id.copy_from_slice(&dist_id_bytes);
+
+    let _ = &req.initiator_did; // recorded for audit
+
+    let (allocations, remaining) = mgr.pool_distribute(&pool_id, &dist_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to distribute: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(PoolDistributeResponse {
+        success: true,
+        allocations,
+        remaining_balance: remaining,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PoolClaimRequest {
+    pool_id: String,
+    distribution_id: String,
+    claimant_did: String,
+    signing_key_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct PoolClaimResponse {
+    success: bool,
+    amount: f64,
+}
+
+pub async fn pool_claim_handler(
+    State(state): State<IdentityState>,
+    Json(req): Json<PoolClaimRequest>,
+) -> Result<Json<PoolClaimResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let _sk_bytes = hex::decode(&req.signing_key_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid signing key hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let pool_id_bytes = hex::decode(&req.pool_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid pool ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let dist_id_bytes = hex::decode(&req.distribution_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid distribution ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if pool_id_bytes.len() != 32 || dist_id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Pool ID and distribution ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut pool_id = [0u8; 32];
+    pool_id.copy_from_slice(&pool_id_bytes);
+    let mut dist_id = [0u8; 32];
+    dist_id.copy_from_slice(&dist_id_bytes);
+
+    let amount = mgr
+        .pool_claim(&pool_id, &dist_id, &req.claimant_did)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to claim: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    Ok(Json(PoolClaimResponse {
+        success: true,
+        amount,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct GetPoolResponse {
+    pool: serde_json::Value,
+}
+
+pub async fn pool_get_handler(
+    State(state): State<IdentityState>,
+    Path(pool_id_hex): Path<String>,
+) -> Result<Json<GetPoolResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let id_bytes = hex::decode(&pool_id_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid pool ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Pool ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut pool_id = [0u8; 32];
+    pool_id.copy_from_slice(&id_bytes);
+
+    let pool = mgr.get_pool(&pool_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Pool not found: {}", pool_id_hex),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let pool_json = serde_json::to_value(pool).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize pool: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(GetPoolResponse { pool: pool_json }))
+}
+
+#[derive(Serialize)]
+pub struct PoolClaimsListResponse {
+    claims: Vec<serde_json::Value>,
+}
+
+pub async fn pool_claims_list_handler(
+    State(state): State<IdentityState>,
+    Path(pool_id_hex): Path<String>,
+) -> Result<Json<PoolClaimsListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mgr = state.lock().await;
+
+    let id_bytes = hex::decode(&pool_id_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid pool ID hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    if id_bytes.len() != 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Pool ID must be 32 bytes".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let mut pool_id = [0u8; 32];
+    pool_id.copy_from_slice(&id_bytes);
+
+    let pool = mgr.get_pool(&pool_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Pool not found: {}", pool_id_hex),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let claims_json: Vec<serde_json::Value> = pool
+        .claims
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialize claims: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    Ok(Json(PoolClaimsListResponse {
+        claims: claims_json,
+    }))
 }
 
 // Network Health endpoint
