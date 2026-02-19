@@ -14,16 +14,21 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
             ghcr.io/disentangle-network/disentangle-node:latest
@@ -43,11 +48,11 @@ jobs:
           sarif_file: trivy-results.sarif
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
-      - name: Sign image
+      - name: Sign image by digest
         env:
           COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign --yes ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+          cosign sign --yes ghcr.io/disentangle-network/disentangle-node@${{ steps.build.outputs.digest }}
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -56,4 +61,4 @@ jobs:
           output-file: sbom.spdx.json
       - name: Attach SBOM to image
         run: |
-          cosign attach sbom --sbom sbom.spdx.json ghcr.io/disentangle-network/disentangle-node:${{ github.ref_name }}
+          cosign attach sbom --sbom sbom.spdx.json ghcr.io/disentangle-network/disentangle-node@${{ steps.build.outputs.digest }}
