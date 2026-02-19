@@ -17,6 +17,7 @@
 pub mod agreement;
 pub mod capability;
 pub mod coherence;
+pub mod commons_pool;
 pub mod did;
 pub mod governance;
 pub mod graph;
@@ -50,6 +51,7 @@ pub use governance::{
 };
 pub use graph::IdentityGraph;
 pub use intent::{IntentCoherenceSnapshot, IntentParticipant, IntentStatus, SharedIntent};
+pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use oracle::{AgentScore, DistributionRoot, OracleQuery, RegionSelector};
 pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
 pub use proposal::{JoinCommitment, Proposal, ProposalStatus};
