@@ -81,6 +81,94 @@ pub fn fp_mul(a: FixedPoint, b: FixedPoint) -> FixedPoint {
     ((a as i64 * b as i64) / SCALE as i64) as FixedPoint
 }
 
+/// Typed payload for identity and coordination operations.
+///
+/// When present on a Transaction, the payload specifies an identity-layer operation
+/// that should be applied to IdentityStateManager when the transaction is processed.
+/// This enables identity state federation -- identity operations propagate via the
+/// existing gossipsub DAG and are replayed on all nodes.
+///
+/// Complex nested types use Vec<u8> (bincode-serialized) to avoid circular
+/// dependencies between disentangle-dag and disentangle-identity crates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionPayload {
+    /// Pure value/presence transaction (existing behavior)
+    Heartbeat,
+
+    // -- Identity operations --
+    /// Register a new DID. did_document is bincode-serialized DIDDocument.
+    RegisterIdentity { did_document: Vec<u8> },
+    /// Deactivate a DID.
+    DeactivateIdentity { did: String },
+
+    // -- Social graph --
+    /// Create an introduction between two DIDs.
+    Introduce {
+        from_did: String,
+        to_did: String,
+        edge_name: String,
+        context: String,
+    },
+
+    // -- Capability operations --
+    /// Create a capability. capability is bincode-serialized Capability.
+    CreateCapability { capability: Vec<u8> },
+    /// Delegate a capability to another DID.
+    DelegateCapability {
+        cap_id: [u8; 32],
+        to_did: String,
+        delegation: Vec<u8>,
+    },
+    /// Invoke a capability.
+    InvokeCapability { cap_id: [u8; 32] },
+    /// Revoke a capability.
+    RevokeCapability { cap_id: [u8; 32], scope: String },
+
+    // -- Petnames --
+    /// Set a petname mapping.
+    SetPetname { name: String, target_did: String },
+
+    // -- Governance --
+    /// Create a governance proposal. proposal is bincode-serialized GovernanceProposal.
+    Propose { proposal: Vec<u8> },
+    /// Cast a vote. vote is bincode-serialized GovernanceVote.
+    Vote {
+        proposal_id: [u8; 32],
+        vote: Vec<u8>,
+    },
+
+    // -- Coordination --
+    /// Create a shared intent. intent is bincode-serialized SharedIntent init data.
+    CreateIntent { intent: Vec<u8> },
+    /// Join a shared intent. commitment is bincode-serialized join data.
+    JoinIntent {
+        intent_id: [u8; 32],
+        commitment: Vec<u8>,
+    },
+
+    // -- Oracle & Pools --
+    /// Submit an oracle query. query is bincode-serialized OracleQuery.
+    OracleQuery { query: Vec<u8> },
+    /// Create a commons pool.
+    CreatePool { name: String, description: String },
+    /// Deposit into a pool.
+    PoolDeposit {
+        pool_id: [u8; 32],
+        amount: f64,
+        source: String,
+    },
+    /// Apply a distribution to a pool.
+    PoolDistribute {
+        pool_id: [u8; 32],
+        distribution_id: [u8; 32],
+    },
+    /// Claim an allocation from a pool.
+    PoolClaim {
+        pool_id: [u8; 32],
+        distribution_id: [u8; 32],
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub id: NodeId,
@@ -94,6 +182,12 @@ pub struct Transaction {
     /// Optional confidential outputs for privacy-preserving transfers
     #[serde(default)]
     pub confidential_outputs: Vec<disentangle_zkp::ConfidentialOutput>,
+
+    /// Optional typed payload for identity/coordination operations.
+    /// None = pure DAG transaction (legacy). Some = typed operation.
+    /// #[serde(default)] ensures backward-compatible deserialization.
+    #[serde(default)]
+    pub payload: Option<TransactionPayload>,
 }
 
 impl Transaction {
@@ -529,6 +623,7 @@ mod tests {
             nullifier,
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
         tx.id = tx.compute_id();
         tx
@@ -1065,6 +1160,7 @@ mod tests {
             nullifier: Nullifier::compute(&[0u8; 32], Epoch(0), b"test"),
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
 
         assert!(
@@ -1090,6 +1186,7 @@ mod tests {
             nullifier: Nullifier::compute(&[0u8; 32], Epoch(0), b"test"),
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
 
         let tampered_message = b"tampered message";
@@ -1117,6 +1214,7 @@ mod tests {
             nullifier: Nullifier::compute(&[0u8; 32], Epoch(0), b"test"),
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
 
         assert!(

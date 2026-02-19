@@ -376,6 +376,7 @@ mod tests {
             nullifier,
             reputation_claim: reputation,
             confidential_outputs: vec![],
+            payload: None,
         };
         tx.id = tx.compute_id();
         tx

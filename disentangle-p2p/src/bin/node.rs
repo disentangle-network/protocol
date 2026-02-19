@@ -257,6 +257,7 @@ async fn submit_tx_handler(
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
     let tx_id = tx.id;
@@ -324,6 +325,7 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
         nullifier: nullifier_red,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx_red.id = tx_red.compute_id();
     let tx_red_id = tx_red.id;
@@ -343,6 +345,7 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
         nullifier: nullifier_blue,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx_blue.id = tx_blue.compute_id();
     let tx_blue_id = tx_blue.id;
@@ -671,6 +674,7 @@ fn create_genesis(sync: &mut SyncState) {
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     genesis.id = genesis.compute_id();
     let genesis_id = genesis.id;
@@ -723,6 +727,7 @@ fn mine_transaction(
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
 

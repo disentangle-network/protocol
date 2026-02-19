@@ -58,6 +58,7 @@ fn make_test_tx(
         nullifier,
         reputation_claim: reputation,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
     tx
