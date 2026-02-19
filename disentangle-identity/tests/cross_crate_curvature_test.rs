@@ -48,6 +48,7 @@ fn make_dag_tx(
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
     tx

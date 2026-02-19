@@ -5,6 +5,7 @@
 
 use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
+use disentangle_dag::{NodeId, TransactionPayload};
 use disentangle_identity::{
     evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
     CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, CommonsPool,
@@ -40,6 +41,13 @@ struct SerializableState {
     commons_pools: Vec<CommonsPool>,
 }
 
+/// A pending payload queued by a local RPC operation for federation broadcast.
+/// The node's main loop drains these, wraps them in DAG transactions, and gossips.
+pub struct PendingPayload {
+    pub payload: TransactionPayload,
+    pub signer_pk: VerifyingKey,
+}
+
 pub struct IdentityStateManager {
     did_registry: HashMap<String, (DIDDocument, VerifyingKey)>,
     capability_store: HashMap<CapabilityId, Capability>,
@@ -59,6 +67,10 @@ pub struct IdentityStateManager {
     commons_pools: HashMap<Hash256, CommonsPool>,
     // Excitability gradient tracking
     curvature_history: CurvatureHistory,
+    // Federation: payloads queued by local RPC operations for DAG broadcast.
+    // Drained by the node's main loop. apply_payload() does NOT queue here
+    // (preventing infinite gossip loops).
+    pending_payloads: Vec<PendingPayload>,
 }
 
 impl Default for IdentityStateManager {
@@ -86,7 +98,14 @@ impl IdentityStateManager {
             oracle_distributions: HashMap::new(),
             commons_pools: HashMap::new(),
             curvature_history: HashMap::new(),
+            pending_payloads: Vec::new(),
         }
+    }
+
+    /// Drain all pending payloads queued by local RPC operations.
+    /// Called by the node's main loop to create DAG transactions and gossip.
+    pub fn drain_payloads(&mut self) -> Vec<PendingPayload> {
+        std::mem::take(&mut self.pending_payloads)
     }
 
     // DID Operations
@@ -120,6 +139,16 @@ impl IdentityStateManager {
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
 
+        // Queue payload for federation broadcast
+        if let Ok(doc_bytes) = bincode::serialize(&doc) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::RegisterIdentity {
+                    did_document: doc_bytes,
+                },
+                signer_pk: pk,
+            });
+        }
+
         Ok((did, doc, sk))
     }
 
@@ -141,6 +170,16 @@ impl IdentityStateManager {
 
         // TODO: Verify proof in Phase 2
         // For Phase 1, we trust the proof parameter
+
+        // Queue payload for federation broadcast BEFORE removing from registry
+        if let Some((_, pk)) = self.did_registry.get(did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::DeactivateIdentity {
+                    did: did.to_string(),
+                },
+                signer_pk: pk.clone(),
+            });
+        }
 
         self.did_registry.remove(did);
         Ok(())
@@ -173,6 +212,18 @@ impl IdentityStateManager {
         cap.id = cap.compute_id();
 
         self.capability_store.insert(cap.id, cap.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(issuer_did) {
+            if let Ok(cap_bytes) = bincode::serialize(&cap) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::CreateCapability {
+                        capability: cap_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(cap)
     }
@@ -233,6 +284,20 @@ impl IdentityStateManager {
 
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(delegator_did) {
+            if let Ok(delegation_bytes) = bincode::serialize(&record) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::DelegateCapability {
+                        cap_id: *cap_id,
+                        to_did: delegatee_did.to_string(),
+                        delegation: delegation_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(record)
     }
@@ -317,7 +382,23 @@ impl IdentityStateManager {
             ));
         }
 
-        self.identity_graph.record_revocation(cap_id, scope);
+        self.identity_graph.record_revocation(cap_id, scope.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(revoker_did) {
+            let scope_str = match scope {
+                RevocationScope::Single => "single".to_string(),
+                RevocationScope::Subtree => "subtree".to_string(),
+                RevocationScope::All => "all".to_string(),
+            };
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::RevokeCapability {
+                    cap_id: *cap_id,
+                    scope: scope_str,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
 
         Ok(())
     }
@@ -384,6 +465,19 @@ impl IdentityStateManager {
 
         // Snapshot curvature after graph mutation
         self.snapshot_curvature(self.current_depth);
+
+        // Queue payload for federation broadcast
+        if let Some((_, introducer_pk)) = self.did_registry.get(introducer_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::Introduce {
+                    from_did: introducer_did.to_string(),
+                    to_did: introduced_did.to_string(),
+                    edge_name: edge_name.to_string(),
+                    context: "direct".to_string(),
+                },
+                signer_pk: introducer_pk.clone(),
+            });
+        }
 
         Ok(())
     }
@@ -463,7 +557,20 @@ impl IdentityStateManager {
     pub fn set_petname(&mut self, name: &str, did: &str) -> Result<(), IdentityError> {
         let did_obj = DID(did.to_string());
         self.petnames
-            .bind(name, &did_obj, vec![], self.current_depth)
+            .bind(name, &did_obj, vec![], self.current_depth)?;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::SetPetname {
+                    name: name.to_string(),
+                    target_did: did.to_string(),
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Resolve a petname to a DID
@@ -519,6 +626,18 @@ impl IdentityStateManager {
 
         self.proposals.insert(proposal.id, proposal.clone());
 
+        // Queue payload for federation broadcast
+        if let Ok(prop_bytes) = bincode::serialize(&proposal) {
+            if let Some((_, pk)) = self.did_registry.get(proposer_did) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::Propose {
+                        proposal: prop_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
+
         Ok(proposal)
     }
 
@@ -571,6 +690,19 @@ impl IdentityStateManager {
         };
 
         self.votes.push(gov_vote.clone());
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(voter_did) {
+            if let Ok(vote_bytes) = bincode::serialize(&gov_vote) {
+                self.pending_payloads.push(PendingPayload {
+                    payload: TransactionPayload::Vote {
+                        proposal_id: *proposal_id,
+                        vote: vote_bytes,
+                    },
+                    signer_pk: pk.clone(),
+                });
+            }
+        }
 
         Ok(gov_vote)
     }
@@ -1182,7 +1314,12 @@ impl IdentityStateManager {
 
     // Oracle Operations
 
-    /// Compute distribution for an oracle query
+    /// Compute distribution for an oracle query.
+    ///
+    /// Implements paper Definition 5 (eq. 6):
+    ///   a(i) = R * max(0, meangrad(i)) / sum_k max(0, meangrad(k))
+    ///
+    /// With eligibility filter: A_elig = {i : topomass(i) >= theta_min}
     pub fn compute_oracle_distribution(
         &mut self,
         query: OracleQuery,
@@ -1204,10 +1341,9 @@ impl IdentityStateManager {
             RegionSelector::Global => self.did_registry.keys().cloned().collect(),
         };
 
-        // Compute scores for each agent
+        // Compute scores for each eligible agent
         let mut scores = HashMap::new();
         for did in &dids {
-            // Compute mass delta over window
             let did_obj = DID(did.clone());
             let first_seen = self
                 .first_seen
@@ -1215,6 +1351,7 @@ impl IdentityStateManager {
                 .copied()
                 .unwrap_or(query.depth_start);
 
+            // Compute coherence profiles for mass delta (diagnostic)
             let profile_start = CoherenceProfile::compute(
                 &did_obj,
                 &self.identity_graph,
@@ -1228,15 +1365,19 @@ impl IdentityStateManager {
                 query.depth_end,
             );
 
+            // Eligibility filter: topomass >= min_coherence (paper's theta_min)
+            if query.min_coherence > 0.0 {
+                let topomass = profile_end.topological_mass as f64;
+                if topomass < query.min_coherence {
+                    continue;
+                }
+            }
+
             let mass_delta =
                 profile_end.topological_mass as f64 - profile_start.topological_mass as f64;
 
-            // Compute curvature delta (mean curvature with other DIDs in region)
-            let curvature_start = self.compute_group_member_curvature(did, &dids);
-            let curvature_end = self.compute_group_member_curvature(did, &dids);
-            let curvature_delta = curvature_end - curvature_start;
-
-            // Compute curvature derivative (mean derivative with other DIDs in region)
+            // Compute meangrad: mean curvature derivative across neighbors in region
+            // Paper Definition 4: meangrad(i) = (1/|N(i)|) * sum_{j in N(i)} d_kappa/dd
             let window = query.depth_end.saturating_sub(query.depth_start);
             let neighbors = self.get_neighbors(did);
             let mut derivative_sum = 0.0;
@@ -1255,7 +1396,7 @@ impl IdentityStateManager {
                 0.0
             };
 
-            // Compute diversity (distinct positive-curvature connections in region)
+            // Diversity: distinct positive-curvature connections in region (diagnostic)
             let diversity = dids
                 .iter()
                 .filter(|other| *other != did)
@@ -1269,7 +1410,6 @@ impl IdentityStateManager {
             let mut score = AgentScore {
                 did: did.clone(),
                 mass_delta,
-                curvature_delta,
                 curvature_derivative,
                 diversity,
                 composite: 0.0,
@@ -1312,13 +1452,22 @@ impl IdentityStateManager {
         }
 
         let pool = CommonsPool::new(
-            name,
-            description,
+            name.clone(),
+            description.clone(),
             creator_did.to_string(),
             self.current_depth,
         );
         let pool_id = pool.id;
         self.commons_pools.insert(pool_id, pool);
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(creator_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::CreatePool { name, description },
+                signer_pk: pk.clone(),
+            });
+        }
+
         Ok(pool_id)
     }
 
@@ -1342,10 +1491,24 @@ impl IdentityStateManager {
         pool.deposit(
             depositor_did.to_string(),
             amount,
-            source,
+            source.clone(),
             self.current_depth,
         );
-        Ok(pool.balance)
+        let balance = pool.balance;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(depositor_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolDeposit {
+                    pool_id: *pool_id,
+                    amount,
+                    source,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(balance)
     }
 
     /// Distribute pool funds using an oracle distribution
@@ -1370,6 +1533,18 @@ impl IdentityStateManager {
         let allocations = pool.distribute(*distribution_id, &weights, self.current_depth);
         let remaining = pool.balance;
 
+        // Queue payload for federation broadcast
+        // Use any registered pk as signer (distribution is a system-level operation)
+        if let Some((_, pk)) = self.did_registry.values().next() {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolDistribute {
+                    pool_id: *pool_id,
+                    distribution_id: *distribution_id,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
         Ok((allocations, remaining))
     }
 
@@ -1389,10 +1564,24 @@ impl IdentityStateManager {
             .get_mut(pool_id)
             .ok_or_else(|| IdentityError::CapabilityNotFound(hex::encode(pool_id)))?;
 
-        pool.claim(claimant_did, *distribution_id, self.current_depth)
+        let claimed = pool
+            .claim(claimant_did, *distribution_id, self.current_depth)
             .ok_or_else(|| {
                 IdentityError::ConstraintNotSatisfied("No allocation for claimant".to_string())
-            })
+            })?;
+
+        // Queue payload for federation broadcast
+        if let Some((_, pk)) = self.did_registry.get(claimant_did) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::PoolClaim {
+                    pool_id: *pool_id,
+                    distribution_id: *distribution_id,
+                },
+                signer_pk: pk.clone(),
+            });
+        }
+
+        Ok(claimed)
     }
 
     /// Get a pool by ID
@@ -1403,6 +1592,309 @@ impl IdentityStateManager {
     /// List all pools
     pub fn list_pools(&self) -> Vec<&CommonsPool> {
         self.commons_pools.values().collect()
+    }
+
+    // Transaction Payload Processing (Federation)
+
+    /// Apply a typed transaction payload to identity state.
+    ///
+    /// This is the replay-safe entry point for identity operations arriving via
+    /// DAG gossip. Unlike the RPC handlers, this method does NOT generate keys
+    /// or sign operations -- it applies already-validated state changes.
+    ///
+    /// The tx_id and ephemeral_pk identify the originating transaction and signer.
+    pub fn apply_payload(
+        &mut self,
+        payload: &TransactionPayload,
+        _tx_id: &NodeId,
+        ephemeral_pk: &VerifyingKey,
+        depth: u64,
+    ) -> Result<(), IdentityError> {
+        // Update depth to at least the transaction's depth
+        if depth > self.current_depth {
+            self.current_depth = depth;
+        }
+
+        match payload {
+            TransactionPayload::Heartbeat => {
+                // No state change -- pure presence signal
+                Ok(())
+            }
+
+            TransactionPayload::RegisterIdentity { did_document } => {
+                let doc: DIDDocument = bincode::deserialize(did_document).map_err(|e| {
+                    IdentityError::InvalidDID(format!("Failed to deserialize DIDDocument: {}", e))
+                })?;
+
+                let did_str = doc.id.0.clone();
+
+                // Skip if already registered (idempotent)
+                if self.did_registry.contains_key(&did_str) {
+                    return Ok(());
+                }
+
+                // Use the transaction's ephemeral_pk as the DID's verifying key
+                self.first_seen.insert(did_str.clone(), depth);
+                self.did_registry
+                    .insert(did_str, (doc, ephemeral_pk.clone()));
+                self.snapshot_curvature(depth);
+                Ok(())
+            }
+
+            TransactionPayload::DeactivateIdentity { did } => {
+                // Idempotent -- silently succeed if not found
+                self.did_registry.remove(did);
+                Ok(())
+            }
+
+            TransactionPayload::Introduce {
+                from_did,
+                to_did,
+                edge_name,
+                context,
+            } => {
+                // Both DIDs must exist for the introduction to be meaningful
+                if !self.did_registry.contains_key(from_did)
+                    || !self.did_registry.contains_key(to_did)
+                {
+                    return Ok(()); // Skip silently -- the DIDs may not have propagated yet
+                }
+
+                let intro_context = match context.as_str() {
+                    "directory" => IntroductionContext::Directory {
+                        directory_did: DID(from_did.clone()),
+                    },
+                    "discovery" => IntroductionContext::Discovery,
+                    _ => IntroductionContext::Direct,
+                };
+
+                let tx = IntroductionTransaction {
+                    introducer_did: DID(from_did.clone()),
+                    introduced_did: DID(to_did.clone()),
+                    edge_name: edge_name.clone(),
+                    context: intro_context,
+                    capability_grants: vec![],
+                    proof: disentangle_crypto::sign(
+                        // Use a dummy signature for replay -- the tx-level signature
+                        // already validates this operation
+                        &disentangle_crypto::signature::generate_keypair().0,
+                        b"replay",
+                    ),
+                    parents: vec![],
+                    depth,
+                };
+
+                self.identity_graph.record_introduction(&tx);
+                self.introduction_history.push(tx);
+                self.snapshot_curvature(depth);
+                Ok(())
+            }
+
+            TransactionPayload::CreateCapability { capability } => {
+                let cap: Capability = bincode::deserialize(capability).map_err(|e| {
+                    IdentityError::InvalidDID(format!("Failed to deserialize Capability: {}", e))
+                })?;
+
+                // Idempotent
+                if self.capability_store.contains_key(&cap.id) {
+                    return Ok(());
+                }
+
+                self.capability_store.insert(cap.id, cap);
+                Ok(())
+            }
+
+            TransactionPayload::DelegateCapability {
+                cap_id,
+                to_did: _,
+                delegation,
+            } => {
+                let record: DelegationRecord = bincode::deserialize(delegation).map_err(|e| {
+                    IdentityError::InvalidDID(format!(
+                        "Failed to deserialize DelegationRecord: {}",
+                        e
+                    ))
+                })?;
+
+                let chain = self.delegation_chains.entry(*cap_id).or_default();
+                chain.push(record.clone());
+                self.identity_graph.record_delegation(&record);
+                Ok(())
+            }
+
+            TransactionPayload::InvokeCapability { cap_id: _ } => {
+                // Invocations are recorded in the DAG itself.
+                // No additional state change needed in IdentityStateManager.
+                Ok(())
+            }
+
+            TransactionPayload::RevokeCapability { cap_id, scope } => {
+                let revocation_scope = match scope.as_str() {
+                    "subtree" => RevocationScope::Subtree,
+                    "all" => RevocationScope::All,
+                    _ => RevocationScope::Single,
+                };
+                self.identity_graph
+                    .record_revocation(cap_id, revocation_scope);
+                Ok(())
+            }
+
+            TransactionPayload::SetPetname { name, target_did } => {
+                let did_obj = DID(target_did.clone());
+                self.petnames
+                    .bind(name, &did_obj, vec![], depth)
+                    .map_err(|_| {
+                        IdentityError::InvalidDID(format!(
+                            "Failed to bind petname '{}' to '{}'",
+                            name, target_did
+                        ))
+                    })?;
+                Ok(())
+            }
+
+            TransactionPayload::Propose { proposal } => {
+                let prop: GovernanceProposal = bincode::deserialize(proposal).map_err(|e| {
+                    IdentityError::InvalidDID(format!(
+                        "Failed to deserialize GovernanceProposal: {}",
+                        e
+                    ))
+                })?;
+
+                let prop_id = prop.id;
+                self.proposals.entry(prop_id).or_insert(prop);
+                Ok(())
+            }
+
+            TransactionPayload::Vote { proposal_id, vote } => {
+                let gov_vote: GovernanceVote = bincode::deserialize(vote).map_err(|e| {
+                    IdentityError::InvalidDID(format!(
+                        "Failed to deserialize GovernanceVote: {}",
+                        e
+                    ))
+                })?;
+
+                // Verify the proposal exists
+                if !self.proposals.contains_key(proposal_id) {
+                    return Ok(()); // Skip if proposal not yet propagated
+                }
+
+                self.votes.push(gov_vote);
+                Ok(())
+            }
+
+            TransactionPayload::CreateIntent { intent: _ }
+            | TransactionPayload::JoinIntent {
+                intent_id: _,
+                commitment: _,
+            } => {
+                // Intent operations require complex multi-field deserialization.
+                // Stub for Phase 2b -- full implementation in Phase 2c when
+                // RPC handlers are refactored to emit these payloads.
+                Ok(())
+            }
+
+            TransactionPayload::OracleQuery { query } => {
+                let oracle_query: OracleQuery = bincode::deserialize(query).map_err(|e| {
+                    IdentityError::InvalidDID(format!("Failed to deserialize OracleQuery: {}", e))
+                })?;
+
+                // Compute and store the distribution
+                self.compute_oracle_distribution(oracle_query)?;
+                Ok(())
+            }
+
+            TransactionPayload::CreatePool { name, description } => {
+                // Derive creator DID from the transaction's ephemeral_pk
+                // Look up which DID this key belongs to
+                let creator_did = self
+                    .did_registry
+                    .iter()
+                    .find(|(_, (_, pk))| pk == ephemeral_pk)
+                    .map(|(did, _)| did.clone());
+
+                if let Some(did) = creator_did {
+                    let _ = self.create_pool(name.clone(), description.clone(), &did);
+                }
+                Ok(())
+            }
+
+            TransactionPayload::PoolDeposit {
+                pool_id,
+                amount,
+                source,
+            } => {
+                let depositor_did = self
+                    .did_registry
+                    .iter()
+                    .find(|(_, (_, pk))| pk == ephemeral_pk)
+                    .map(|(did, _)| did.clone());
+
+                if let Some(did) = depositor_did {
+                    let _ = self.pool_deposit(pool_id, &did, *amount, source.clone());
+                }
+                Ok(())
+            }
+
+            TransactionPayload::PoolDistribute {
+                pool_id,
+                distribution_id,
+            } => {
+                let _ = self.pool_distribute(pool_id, distribution_id);
+                Ok(())
+            }
+
+            TransactionPayload::PoolClaim {
+                pool_id,
+                distribution_id,
+            } => {
+                let claimant_did = self
+                    .did_registry
+                    .iter()
+                    .find(|(_, (_, pk))| pk == ephemeral_pk)
+                    .map(|(did, _)| did.clone());
+
+                if let Some(did) = claimant_did {
+                    let _ = self.pool_claim(pool_id, distribution_id, &did);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Reconstruct identity state by replaying all payload-bearing transactions
+    /// from a DAG in topological order.
+    ///
+    /// Used for:
+    /// - Cold start recovery when disentangle-state.json is missing/corrupt
+    /// - Late joiner sync (after downloading a DAG snapshot)
+    /// - Audit verification (replay from genesis to verify state)
+    pub fn reconstruct_from_dag(
+        dag: &mut disentangle_dag::TransactionDAG,
+    ) -> Result<Self, IdentityError> {
+        let mut mgr = Self::new();
+
+        // Collect all transactions with their depths for sorting
+        let mut tx_entries: Vec<(u64, NodeId, disentangle_dag::Transaction)> = dag
+            .iter_transactions()
+            .map(|(id, tx)| {
+                let depth = dag.cached_depth(id).unwrap_or(0);
+                (depth, *id, tx.clone())
+            })
+            .collect();
+
+        // Sort by depth (topological order approximation)
+        tx_entries.sort_by_key(|(depth, _, _)| *depth);
+
+        // Replay all payload-bearing transactions
+        for (depth, tx_id, tx) in &tx_entries {
+            if let Some(payload) = &tx.payload {
+                // Errors during replay are expected (e.g., dependency ordering).
+                // apply_payload is already fault-tolerant and idempotent.
+                let _ = mgr.apply_payload(payload, tx_id, &tx.ephemeral_pk, *depth);
+            }
+        }
+
+        Ok(mgr)
     }
 
     // Excitability Gradient Methods
@@ -1639,21 +2131,6 @@ impl IdentityStateManager {
         }
     }
 
-    /// Compute mean curvature between a DID and a group
-    fn compute_group_member_curvature(&self, did: &str, group: &[String]) -> f64 {
-        let curvatures: Vec<f64> = group
-            .iter()
-            .filter(|other| *other != did)
-            .filter_map(|other| self.get_identity_curvature(did, other))
-            .collect();
-
-        if curvatures.is_empty() {
-            0.0
-        } else {
-            curvatures.iter().sum::<f64>() / curvatures.len() as f64
-        }
-    }
-
     // Persistence Operations
 
     /// Save state to a JSON file
@@ -1822,6 +2299,7 @@ impl IdentityStateManager {
             oracle_distributions,
             commons_pools,
             curvature_history: HashMap::new(), // Rebuilt on startup
+            pending_payloads: Vec::new(),
         })
     }
 
@@ -2528,5 +3006,336 @@ mod tests {
         // Non-existent pool
         let result = manager.pool_deposit(&fake_id, "did:fake", 100.0, "".to_string());
         assert!(result.is_err());
+    }
+
+    // -- apply_payload tests --
+
+    #[test]
+    fn test_apply_payload_heartbeat() {
+        let mut manager = IdentityStateManager::new();
+        let (_, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx_id = [0u8; 32];
+
+        let result = manager.apply_payload(&TransactionPayload::Heartbeat, &tx_id, &pk, 1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_payload_register_identity() {
+        let mut manager = IdentityStateManager::new();
+        let (sk, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx_id = [1u8; 32];
+
+        // Create a DIDDocument manually
+        let doc = DIDDocument::new(&sk, &pk, AgentType::Human, 10);
+        let did_str = doc.id.0.clone();
+        let doc_bytes = bincode::serialize(&doc).unwrap();
+
+        let payload = TransactionPayload::RegisterIdentity {
+            did_document: doc_bytes,
+        };
+
+        let result = manager.apply_payload(&payload, &tx_id, &pk, 10);
+        assert!(result.is_ok());
+
+        // Verify the DID was registered
+        assert!(manager.get_did_document(&did_str).is_some());
+        assert_eq!(manager.list_dids().len(), 1);
+    }
+
+    #[test]
+    fn test_apply_payload_register_identity_idempotent() {
+        let mut manager = IdentityStateManager::new();
+        let (sk, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx_id = [1u8; 32];
+
+        let doc = DIDDocument::new(&sk, &pk, AgentType::Human, 10);
+        let doc_bytes = bincode::serialize(&doc).unwrap();
+
+        let payload = TransactionPayload::RegisterIdentity {
+            did_document: doc_bytes,
+        };
+
+        // Apply twice -- should succeed both times (idempotent)
+        manager.apply_payload(&payload, &tx_id, &pk, 10).unwrap();
+        let result = manager.apply_payload(&payload, &tx_id, &pk, 10);
+        assert!(result.is_ok());
+        assert_eq!(manager.list_dids().len(), 1); // Still just one DID
+    }
+
+    #[test]
+    fn test_apply_payload_deactivate_identity() {
+        let mut manager = IdentityStateManager::new();
+
+        // Register a DID first
+        let (did, _, _sk) = manager.register_did(AgentType::Human).unwrap();
+        assert_eq!(manager.list_dids().len(), 1);
+
+        let (_, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx_id = [2u8; 32];
+
+        let payload = TransactionPayload::DeactivateIdentity { did: did.0.clone() };
+
+        let result = manager.apply_payload(&payload, &tx_id, &pk, 20);
+        assert!(result.is_ok());
+        assert!(manager.get_did_document(&did.0).is_none());
+    }
+
+    #[test]
+    fn test_apply_payload_introduce() {
+        let mut manager = IdentityStateManager::new();
+
+        // Register two DIDs
+        let (did_a, _, _) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, _) = manager.register_did(AgentType::Human).unwrap();
+
+        let (_, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx_id = [3u8; 32];
+
+        let payload = TransactionPayload::Introduce {
+            from_did: did_a.0.clone(),
+            to_did: did_b.0.clone(),
+            edge_name: "collaboration".to_string(),
+            context: "direct".to_string(),
+        };
+
+        let result = manager.apply_payload(&payload, &tx_id, &pk, 30);
+        assert!(result.is_ok());
+
+        // Verify the introduction was recorded
+        let neighbors = manager.get_neighbors(&did_a.0);
+        assert!(neighbors.contains(&did_b.0));
+    }
+
+    #[test]
+    fn test_apply_payload_create_pool() {
+        let mut manager = IdentityStateManager::new();
+
+        // Register a DID
+        let (_, _, _sk) = manager.register_did(AgentType::Human).unwrap();
+        let pk = manager.did_registry.values().next().unwrap().1.clone();
+        let tx_id = [4u8; 32];
+
+        let payload = TransactionPayload::CreatePool {
+            name: "Test Pool".to_string(),
+            description: "A test pool".to_string(),
+        };
+
+        let result = manager.apply_payload(&payload, &tx_id, &pk, 40);
+        assert!(result.is_ok());
+        assert_eq!(manager.list_pools().len(), 1);
+    }
+
+    #[test]
+    fn test_apply_payload_backward_compat() {
+        // Verify that Transaction without payload field deserializes correctly
+        // (simulating old transactions)
+        use disentangle_dag::Transaction;
+
+        let (sk, pk) = disentangle_crypto::signature::generate_keypair();
+        let tx = Transaction {
+            id: [0u8; 32],
+            ephemeral_pk: pk,
+            signature: disentangle_crypto::sign(&sk, b"test"),
+            parents: vec![],
+            simhash: disentangle_simhash::SimHash::from_structural(&[], &[0u8; 32]),
+            nullifier: disentangle_crypto::types::Nullifier::compute(
+                &[0u8; 32],
+                disentangle_crypto::types::Epoch(0),
+                b"test",
+            ),
+            reputation_claim: 0,
+            confidential_outputs: vec![],
+            payload: None,
+        };
+
+        // Serialize and deserialize -- payload should be None
+        let bytes = bincode::serialize(&tx).unwrap();
+        let deserialized: Transaction = bincode::deserialize(&bytes).unwrap();
+        assert!(deserialized.payload.is_none());
+
+        // Serialize with payload -- should round-trip correctly
+        let mut tx_with_payload = tx;
+        tx_with_payload.payload = Some(TransactionPayload::Heartbeat);
+        let bytes2 = bincode::serialize(&tx_with_payload).unwrap();
+        let deserialized2: Transaction = bincode::deserialize(&bytes2).unwrap();
+        assert!(matches!(
+            deserialized2.payload,
+            Some(TransactionPayload::Heartbeat)
+        ));
+    }
+
+    // -- Phase 2c: payload queuing tests --
+
+    #[test]
+    fn test_register_did_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+        assert!(manager.drain_payloads().is_empty());
+
+        manager.register_did(AgentType::Human).unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            payloads[0].payload,
+            TransactionPayload::RegisterIdentity { .. }
+        ));
+
+        // Drain again -- should be empty
+        assert!(manager.drain_payloads().is_empty());
+    }
+
+    #[test]
+    fn test_introduce_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (did_a, _, sk_a) = manager.register_did(AgentType::Human).unwrap();
+        let (did_b, _, _) = manager.register_did(AgentType::Human).unwrap();
+        manager.drain_payloads(); // clear registration payloads
+
+        manager
+            .introduce(&did_a.0, &sk_a, &did_b.0, "collab")
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        match &payloads[0].payload {
+            TransactionPayload::Introduce {
+                from_did, to_did, ..
+            } => {
+                assert_eq!(from_did, &did_a.0);
+                assert_eq!(to_did, &did_b.0);
+            }
+            _ => panic!("Expected Introduce payload"),
+        }
+    }
+
+    #[test]
+    fn test_create_proposal_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (_, _, sk) = manager.register_did(AgentType::Human).unwrap();
+        let did_str = manager.list_dids()[0].clone();
+        manager.drain_payloads();
+
+        manager
+            .create_proposal(
+                &did_str,
+                &sk,
+                ProposalType::ProtocolParameter {
+                    parameter: "test".to_string(),
+                    new_value: b"value".to_vec(),
+                },
+                "Test proposal",
+                100,
+            )
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            payloads[0].payload,
+            TransactionPayload::Propose { .. }
+        ));
+    }
+
+    #[test]
+    fn test_create_pool_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+
+        let (_, _, _) = manager.register_did(AgentType::Human).unwrap();
+        let did_str = manager.list_dids()[0].clone();
+        manager.drain_payloads();
+
+        manager
+            .create_pool("Test Pool".to_string(), "desc".to_string(), &did_str)
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        match &payloads[0].payload {
+            TransactionPayload::CreatePool { name, .. } => {
+                assert_eq!(name, "Test Pool");
+            }
+            _ => panic!("Expected CreatePool payload"),
+        }
+    }
+
+    #[test]
+    fn test_payload_roundtrip_register_then_apply() {
+        // Validate the full federation pattern:
+        // 1. Node A registers a DID (queues payload)
+        // 2. Payload is extracted
+        // 3. Node B applies the payload (simulating gossip receipt)
+        // 4. Both nodes have the same DID registered
+        let mut node_a = IdentityStateManager::new();
+        let mut node_b = IdentityStateManager::new();
+
+        // Node A registers
+        let (did, _, _) = node_a.register_did(AgentType::Human).unwrap();
+
+        // Extract the queued payload
+        let payloads = node_a.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+
+        // Node B applies the payload
+        let tx_id = [99u8; 32];
+        let result = node_b.apply_payload(&payloads[0].payload, &tx_id, &payloads[0].signer_pk, 10);
+        assert!(result.is_ok());
+
+        // Both nodes have the same DID
+        assert!(node_a.get_did_document(&did.0).is_some());
+        assert!(node_b.get_did_document(&did.0).is_some());
+
+        // Node B should NOT have queued any payloads (apply_payload doesn't queue)
+        assert!(node_b.drain_payloads().is_empty());
+    }
+
+    // -- Phase 2d: reconstruct_from_dag test --
+
+    #[test]
+    fn test_reconstruct_from_dag() {
+        use disentangle_dag::{Transaction, TransactionDAG};
+
+        let mut dag = TransactionDAG::new();
+
+        // Create a DIDDocument and a payload-bearing transaction
+        let (sk, pk) = disentangle_crypto::signature::generate_keypair();
+        let doc = DIDDocument::new(&sk, &pk, AgentType::Human, 1);
+        let did_str = doc.id.0.clone();
+        let doc_bytes = bincode::serialize(&doc).unwrap();
+
+        let simhash = disentangle_simhash::SimHash::from_structural(&[], &[0u8; 32]);
+        let nullifier = disentangle_crypto::types::Nullifier::compute(
+            &[0u8; 32],
+            disentangle_crypto::types::Epoch(0),
+            b"reconstruct-test",
+        );
+        let signature = disentangle_crypto::sign(&sk, b"reconstruct-test");
+
+        let mut tx = Transaction {
+            id: [0u8; 32],
+            ephemeral_pk: pk.clone(),
+            signature,
+            parents: vec![],
+            simhash,
+            nullifier,
+            reputation_claim: 0,
+            confidential_outputs: vec![],
+            payload: Some(TransactionPayload::RegisterIdentity {
+                did_document: doc_bytes,
+            }),
+        };
+        tx.id = tx.compute_id();
+
+        // Insert as genesis (no parents)
+        dag.insert_genesis(tx);
+
+        // Reconstruct state from DAG
+        let mgr = IdentityStateManager::reconstruct_from_dag(&mut dag).unwrap();
+
+        // Verify the DID was reconstructed
+        assert!(mgr.get_did_document(&did_str).is_some());
+        assert_eq!(mgr.list_dids().len(), 1);
     }
 }

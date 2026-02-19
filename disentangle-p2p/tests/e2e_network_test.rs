@@ -56,6 +56,7 @@ fn create_test_transaction(name: &str, parents: Vec<NodeId>, epoch_num: u64) -> 
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
 
@@ -97,6 +98,7 @@ fn create_genesis() -> WireTransaction {
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     genesis.id = genesis.compute_id();
 
@@ -171,6 +173,7 @@ async fn test_sync_state_chain() {
             nullifier,
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)
@@ -239,6 +242,7 @@ async fn test_sync_state_missing_parents() {
             nullifier,
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)
@@ -315,6 +319,7 @@ async fn test_sync_state_fork_and_conflict() {
             nullifier,
             reputation_claim: 0,
             confidential_outputs: vec![],
+            payload: None,
         };
         genesis.id = genesis.compute_id();
         WireTransaction::new(genesis, 0)

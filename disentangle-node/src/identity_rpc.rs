@@ -1820,6 +1820,10 @@ pub struct OracleQueryRequest {
     region: serde_json::Value,
     depth_start: u64,
     depth_end: u64,
+    /// Minimum topological mass for eligibility (CoherenceMinimum / theta_min).
+    /// Agents below this threshold are excluded from the distribution.
+    #[serde(default)]
+    min_coherence: f64,
 }
 
 #[derive(Serialize)]
@@ -1844,7 +1848,8 @@ pub async fn oracle_query_handler(
         )
     })?;
 
-    let query = OracleQuery::new(region, req.depth_start, req.depth_end);
+    let query =
+        OracleQuery::with_min_coherence(region, req.depth_start, req.depth_end, req.min_coherence);
 
     let distribution_id = mgr.compute_oracle_distribution(query).map_err(|e| {
         (

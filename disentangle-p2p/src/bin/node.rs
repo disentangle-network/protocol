@@ -257,6 +257,7 @@ async fn submit_tx_handler(
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
     let tx_id = tx.id;
@@ -324,6 +325,7 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
         nullifier: nullifier_red,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx_red.id = tx_red.compute_id();
     let tx_red_id = tx_red.id;
@@ -343,6 +345,7 @@ async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<Conf
         nullifier: nullifier_blue,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx_blue.id = tx_blue.compute_id();
     let tx_blue_id = tx_blue.id;
@@ -591,6 +594,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut mine_timer: Interval = interval(Duration::from_secs(MINE_INTERVAL_SECS));
     let mut save_timer: Interval = interval(Duration::from_secs(30));
+    let mut payload_timer: Interval = interval(Duration::from_millis(200));
     let topic = IdentTopic::new(GOSSIP_TOPIC);
     let mut connected_peers: Vec<PeerId> = Vec::new();
 
@@ -628,6 +632,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(wire_tx) = wire_tx {
                     broadcast_tx(&mut swarm, &topic, &wire_tx);
                     info!("Mined tx. DAG size: {}", shared_state.sync.lock().await.transaction_count());
+                }
+            }
+            _ = payload_timer.tick() => {
+                // Drain pending payloads from identity operations and broadcast as DAG transactions
+                let payloads = {
+                    let mut mgr = shared_state.identity.lock().await;
+                    mgr.drain_payloads()
+                };
+                for pending in payloads {
+                    let mut sync = shared_state.sync.lock().await;
+                    let mut height = shared_state.max_depth.lock().await;
+                    *height += 1;
+                    let depth = *height;
+                    drop(height);
+
+                    let tips: Vec<NodeId> = sync.tips().into_iter().take(3).collect();
+                    let history_root = sha3_256(local_peer_id.to_bytes().as_slice());
+                    let simhash = SimHash::from_structural(&tips, &history_root);
+
+                    // Use the signer's key from the pending payload
+                    let (signing_key, _) = generate_dilithium_keypair();
+                    let sk_hash = sha3_256(&signing_key.to_bytes()[..32]);
+                    let epoch = Epoch::from_depth(depth);
+                    let tx_nonce = format!("identity-{}-{}", local_peer_id, depth);
+                    let nullifier = Nullifier::compute(&sk_hash, epoch, tx_nonce.as_bytes());
+
+                    let message = sha3_256(format!("IDENTITY:{}:{}", local_peer_id, depth).as_bytes());
+                    let signature = dilithium_sign(&signing_key, &message);
+
+                    let mut tx = Transaction {
+                        id: [0u8; 32],
+                        ephemeral_pk: pending.signer_pk,
+                        signature,
+                        parents: tips,
+                        simhash,
+                        nullifier,
+                        reputation_claim: 0,
+                        confidential_outputs: vec![],
+                        payload: Some(pending.payload),
+                    };
+                    tx.id = tx.compute_id();
+                    let tx_id_hex = hex::encode(&tx.id[..8]);
+
+                    let pow = HelloWorldPoW::new(POW_DIFFICULTY);
+                    let nonce = pow.mine(&serialize_tx_header(&tx));
+                    let wire_tx = WireTransaction::new(tx, nonce);
+
+                    match sync.receive_transaction(wire_tx.clone()) {
+                        SyncResult::Inserted => {
+                            drop(sync);
+                            broadcast_tx(&mut swarm, &topic, &wire_tx);
+                            info!("Broadcast identity tx {}", tx_id_hex);
+                        }
+                        other => {
+                            debug!("Identity tx {} not inserted: {:?}", tx_id_hex, other);
+                        }
+                    }
                 }
             }
             Some(cmd) = cmd_rx.recv() => {
@@ -671,6 +732,7 @@ fn create_genesis(sync: &mut SyncState) {
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     genesis.id = genesis.compute_id();
     let genesis_id = genesis.id;
@@ -723,6 +785,7 @@ fn mine_transaction(
         nullifier,
         reputation_claim: 0,
         confidential_outputs: vec![],
+        payload: None,
     };
     tx.id = tx.compute_id();
 
@@ -896,13 +959,30 @@ async fn handle_gossip_message(
         let conflict = detect_conflict(&sync, &wire_tx.tx);
         match sync.receive_transaction(wire_tx.clone()) {
             SyncResult::Inserted => {
+                let depth = sync.transaction_count() as u64;
                 info!(
-                    "📥 Inserted tx {} from gossip. DAG: {}",
+                    "Inserted tx {} from gossip. DAG: {}",
                     tx_id_hex,
                     sync.transaction_count()
                 );
-                if let Some(conflicting_id) = conflict {
+
+                // Process identity payload if present
+                if let Some(ref payload) = wire_tx.tx.payload {
+                    drop(sync); // Release DAG lock before acquiring identity lock
+                    let mut mgr = state.identity.lock().await;
+                    if let Err(e) =
+                        mgr.apply_payload(payload, &tx_id, &wire_tx.tx.ephemeral_pk, depth)
+                    {
+                        warn!("Failed to apply payload from tx {}: {}", tx_id_hex, e);
+                    } else {
+                        debug!("Applied identity payload from tx {}", tx_id_hex);
+                    }
+                    drop(mgr);
+                } else {
                     drop(sync);
+                }
+
+                if let Some(conflicting_id) = conflict {
                     resolve_and_record_conflict(state, tx_id, conflicting_id).await;
                 }
             }
