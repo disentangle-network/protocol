@@ -1861,6 +1861,42 @@ impl IdentityStateManager {
         }
     }
 
+    /// Reconstruct identity state by replaying all payload-bearing transactions
+    /// from a DAG in topological order.
+    ///
+    /// Used for:
+    /// - Cold start recovery when disentangle-state.json is missing/corrupt
+    /// - Late joiner sync (after downloading a DAG snapshot)
+    /// - Audit verification (replay from genesis to verify state)
+    pub fn reconstruct_from_dag(
+        dag: &mut disentangle_dag::TransactionDAG,
+    ) -> Result<Self, IdentityError> {
+        let mut mgr = Self::new();
+
+        // Collect all transactions with their depths for sorting
+        let mut tx_entries: Vec<(u64, NodeId, disentangle_dag::Transaction)> = dag
+            .iter_transactions()
+            .map(|(id, tx)| {
+                let depth = dag.cached_depth(id).unwrap_or(0);
+                (depth, *id, tx.clone())
+            })
+            .collect();
+
+        // Sort by depth (topological order approximation)
+        tx_entries.sort_by_key(|(depth, _, _)| *depth);
+
+        // Replay all payload-bearing transactions
+        for (depth, tx_id, tx) in &tx_entries {
+            if let Some(payload) = &tx.payload {
+                // Errors during replay are expected (e.g., dependency ordering).
+                // apply_payload is already fault-tolerant and idempotent.
+                let _ = mgr.apply_payload(payload, tx_id, &tx.ephemeral_pk, *depth);
+            }
+        }
+
+        Ok(mgr)
+    }
+
     // Excitability Gradient Methods
 
     /// Record curvature snapshot for all edges (call after graph mutations)
@@ -3253,5 +3289,53 @@ mod tests {
 
         // Node B should NOT have queued any payloads (apply_payload doesn't queue)
         assert!(node_b.drain_payloads().is_empty());
+    }
+
+    // -- Phase 2d: reconstruct_from_dag test --
+
+    #[test]
+    fn test_reconstruct_from_dag() {
+        use disentangle_dag::{Transaction, TransactionDAG};
+
+        let mut dag = TransactionDAG::new();
+
+        // Create a DIDDocument and a payload-bearing transaction
+        let (sk, pk) = disentangle_crypto::signature::generate_keypair();
+        let doc = DIDDocument::new(&sk, &pk, AgentType::Human, 1);
+        let did_str = doc.id.0.clone();
+        let doc_bytes = bincode::serialize(&doc).unwrap();
+
+        let simhash = disentangle_simhash::SimHash::from_structural(&[], &[0u8; 32]);
+        let nullifier = disentangle_crypto::types::Nullifier::compute(
+            &[0u8; 32],
+            disentangle_crypto::types::Epoch(0),
+            b"reconstruct-test",
+        );
+        let signature = disentangle_crypto::sign(&sk, b"reconstruct-test");
+
+        let mut tx = Transaction {
+            id: [0u8; 32],
+            ephemeral_pk: pk.clone(),
+            signature,
+            parents: vec![],
+            simhash,
+            nullifier,
+            reputation_claim: 0,
+            confidential_outputs: vec![],
+            payload: Some(TransactionPayload::RegisterIdentity {
+                did_document: doc_bytes,
+            }),
+        };
+        tx.id = tx.compute_id();
+
+        // Insert as genesis (no parents)
+        dag.insert_genesis(tx);
+
+        // Reconstruct state from DAG
+        let mgr = IdentityStateManager::reconstruct_from_dag(&mut dag).unwrap();
+
+        // Verify the DID was reconstructed
+        assert!(mgr.get_did_document(&did_str).is_some());
+        assert_eq!(mgr.list_dids().len(), 1);
     }
 }
