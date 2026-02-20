@@ -1,5 +1,9 @@
 # Disentangle Protocol
 
+[![CI](https://github.com/disentangle-network/protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/disentangle-network/protocol/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/disentangle-network/protocol/branch/main/graph/badge.svg)](https://codecov.io/gh/disentangle-network/protocol)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 **Topological consensus for post-quantum networks.**
 
 Disentangle implements Proof of Entanglement (PoE), a consensus mechanism that derives security from information theory and topology rather than game theory or thermodynamics.
