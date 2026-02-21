@@ -149,6 +149,14 @@ async fn status_handler(State(state): State<SharedState>) -> Json<StatusResponse
     })
 }
 
+/// Returns full 32-byte hex-encoded tip hashes suitable for use as parent
+/// references in transaction submission.
+async fn tips_handler(State(state): State<SharedState>) -> Json<Vec<String>> {
+    let sync = state.sync.lock().await;
+    let tips: Vec<String> = sync.tips().iter().map(hex::encode).collect();
+    Json(tips)
+}
+
 async fn graph_handler(State(state): State<SharedState>) -> Json<GraphResponse> {
     let sync = state.sync.lock().await;
     let dag = sync.dag();
@@ -578,6 +586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/status", get(status_handler))
+        .route("/tips", get(tips_handler))
         .route("/graph", get(graph_handler))
         .route("/transaction", post(submit_tx_handler))
         .route("/debug/trigger-conflict", post(trigger_conflict_handler))

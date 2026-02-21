@@ -1,31 +1,51 @@
 services:
-  # Genesis/bootstrap node
-  node1:
-    build: .
-    container_name: disentangle-node1
+  # Bootstrap node (genesis creator)
+  node-0:
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    container_name: disentangle-node-0
     command: ["9000", "8000"]
     ports:
-      - "8001:8000"  # RPC port (HTTP)
-      - "9001:9000"  # P2P port
+      - "8000:8000"  # RPC
+      - "9000:9000"  # P2P
     networks:
       - disentangle
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 15s
+
+  # Follower node 1
+  node-1:
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    container_name: disentangle-node-1
+    command: ["9000", "8000", "/dns4/node-0/tcp/9000"]
+    ports:
+      - "8001:8000"  # RPC
+      - "9001:9000"  # P2P
+    depends_on:
+      node-0:
+        condition: service_healthy
+    networks:
+      - disentangle
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # Follower node 2
-  node2:
-    build: .
-    container_name: disentangle-node2
-    command: ["9000", "8000", "/dns4/node1/tcp/9000"]
+  node-2:
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    container_name: disentangle-node-2
+    command: ["9000", "8000", "/dns4/node-0/tcp/9000"]
     ports:
-      - "8002:8000"
-      - "9002:9000"
+      - "8002:8000"  # RPC
+      - "9002:9000"  # P2P
     depends_on:
-      node1:
+      node-0:
         condition: service_healthy
     networks:
       - disentangle
@@ -33,68 +53,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # Follower node 3
-  node3:
-    build: .
-    container_name: disentangle-node3
-    command: ["9000", "8000", "/dns4/node1/tcp/9000"]
-    ports:
-      - "8003:8000"
-      - "9003:9000"
-    depends_on:
-      node1:
-        condition: service_healthy
-    networks:
-      - disentangle
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # Follower node 4
-  node4:
-    build: .
-    container_name: disentangle-node4
-    command: ["9000", "8000", "/dns4/node1/tcp/9000"]
-    ports:
-      - "8004:8000"
-      - "9004:9000"
-    depends_on:
-      node1:
-        condition: service_healthy
-    networks:
-      - disentangle
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # Follower node 5
-  node5:
-    build: .
-    container_name: disentangle-node5
-    command: ["9000", "8000", "/dns4/node1/tcp/9000"]
-    ports:
-      - "8005:8000"
-      - "9005:9000"
-    depends_on:
-      node1:
-        condition: service_healthy
-    networks:
-      - disentangle
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 15s
 
 networks:
   disentangle:

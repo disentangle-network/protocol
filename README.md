@@ -52,7 +52,7 @@ cargo test
 docker compose up
 ```
 
-This starts a five-node local testnet with pre-configured peer discovery.
+This starts a three-node local testnet with pre-configured peer discovery.
 
 ### Run a Single Node
 
