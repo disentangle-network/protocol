@@ -20,6 +20,10 @@ pub struct SyncState {
     request_counts: HashMap<NodeId, usize>,
     tips: HashSet<NodeId>,
     pow: HelloWorldPoW,
+    /// Cache of PoW nonces so get_transaction can serve the original nonce.
+    /// Without this, syncing peers would receive nonce=0 and fail PoW validation
+    /// for non-genesis transactions.
+    nonce_cache: HashMap<NodeId, u64>,
 }
 
 struct PendingTx {
@@ -37,6 +41,7 @@ impl SyncState {
             request_counts: HashMap::new(),
             tips: HashSet::new(),
             pow: HelloWorldPoW::new(pow_difficulty),
+            nonce_cache: HashMap::new(),
         }
     }
 
@@ -73,6 +78,8 @@ impl SyncState {
                 return SyncResult::InvalidPoW;
             }
         }
+        // Cache the nonce so get_transaction can return the original value
+        self.nonce_cache.insert(tx_id, wire_tx.nonce);
         let mut missing: HashSet<NodeId> = HashSet::new();
         for parent in &tx.parents {
             if self.dag.get(parent).is_none() && !self.pending.contains_key(parent) {
@@ -166,9 +173,10 @@ impl SyncState {
     }
 
     pub fn get_transaction(&self, id: &NodeId) -> Option<WireTransaction> {
-        self.dag
-            .get(id)
-            .map(|tx| WireTransaction::new(tx.clone(), 0))
+        self.dag.get(id).map(|tx| {
+            let nonce = self.nonce_cache.get(id).copied().unwrap_or(0);
+            WireTransaction::new(tx.clone(), nonce)
+        })
     }
 
     pub fn parent_not_found(&mut self, parent_id: &NodeId) {
