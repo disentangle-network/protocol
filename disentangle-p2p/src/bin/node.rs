@@ -584,15 +584,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(identity_state);
 
-    let app = Router::new()
+    // Build the DAG/core router with SharedState separately, then merge with
+    // the identity router (which already has its own state applied) to avoid
+    // state-type shadowing that can cause 404s on routes like /tips.
+    let core_router = Router::new()
         .route("/status", get(status_handler))
         .route("/tips", get(tips_handler))
         .route("/graph", get(graph_handler))
         .route("/transaction", post(submit_tx_handler))
         .route("/debug/trigger-conflict", post(trigger_conflict_handler))
-        .merge(identity_router)
-        .layer(cors)
         .with_state(shared_state.clone());
+
+    let app = core_router.merge(identity_router).layer(cors);
     let rpc_addr = format!("0.0.0.0:{}", rpc_port);
     let listener = tokio::net::TcpListener::bind(&rpc_addr).await?;
     info!("RPC server listening on http://{}", rpc_addr);
@@ -651,12 +654,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 for pending in payloads {
                     let mut sync = shared_state.sync.lock().await;
+                    let all_tips = sync.tips();
+                    // Need at least MIN_PARENTS=2 tips for a valid DAG transaction
+                    if all_tips.len() < 2 {
+                        debug!(
+                            "Skipping identity tx: only {} tip(s), need at least 2",
+                            all_tips.len()
+                        );
+                        drop(sync);
+                        continue;
+                    }
+                    let tips: Vec<NodeId> = all_tips.into_iter().take(3).collect();
+
                     let mut height = shared_state.max_depth.lock().await;
                     *height += 1;
                     let depth = *height;
                     drop(height);
-
-                    let tips: Vec<NodeId> = sync.tips().into_iter().take(3).collect();
                     let history_root = sha3_256(local_peer_id.to_bytes().as_slice());
                     let simhash = SimHash::from_structural(&tips, &history_root);
 
@@ -717,38 +730,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_genesis(sync: &mut SyncState) {
-    // Generate a deterministic genesis keypair (for reproducibility)
-    let (signing_key, ephemeral_pk) = generate_dilithium_keypair();
+    // Create two genesis transactions so the bootstrap node starts with
+    // MIN_PARENTS (2) tips, preventing cold-start deadlock where mining
+    // requires 2+ tips but only 1 genesis tip exists.
 
-    // Genesis has no parents, so use empty structural inputs
-    let history_root = sha3_256(b"disentangle-genesis-history");
-    let simhash = SimHash::from_structural(&[], &history_root);
+    // Genesis A
+    let (signing_key_a, ephemeral_pk_a) = generate_dilithium_keypair();
+    let history_root_a = sha3_256(b"disentangle-genesis-history");
+    let simhash_a = SimHash::from_structural(&[], &history_root_a);
+    let sk_hash_a = sha3_256(&signing_key_a.to_bytes()[..32]);
+    let nullifier_a = Nullifier::compute(&sk_hash_a, Epoch(0), b"genesis");
+    let message_a = sha3_256(b"disentangle-genesis");
+    let signature_a = dilithium_sign(&signing_key_a, &message_a);
 
-    // Compute nullifier for genesis
-    let sk_hash = sha3_256(&signing_key.to_bytes()[..32]);
-    let nullifier = Nullifier::compute(&sk_hash, Epoch(0), b"genesis");
-
-    // Sign genesis
-    let message = sha3_256(b"disentangle-genesis");
-    let signature = dilithium_sign(&signing_key, &message);
-
-    let mut genesis = Transaction {
+    let mut genesis_a = Transaction {
         id: [0u8; 32],
-        ephemeral_pk,
-        signature,
+        ephemeral_pk: ephemeral_pk_a,
+        signature: signature_a,
         parents: vec![],
-        simhash,
-        nullifier,
+        simhash: simhash_a,
+        nullifier: nullifier_a,
         reputation_claim: 0,
         confidential_outputs: vec![],
         payload: None,
     };
-    genesis.id = genesis.compute_id();
-    let genesis_id = genesis.id;
+    genesis_a.id = genesis_a.compute_id();
+    let genesis_a_id = genesis_a.id;
 
-    let wire_tx = WireTransaction::new(genesis, 0);
-    sync.receive_transaction(wire_tx);
-    info!("Genesis created: {}", hex::encode(&genesis_id[..8]));
+    let wire_tx_a = WireTransaction::new(genesis_a, 0);
+    sync.receive_transaction(wire_tx_a);
+    info!("Genesis A created: {}", hex::encode(&genesis_a_id[..8]));
+
+    // Genesis B (second genesis so bootstrap starts with 2 tips)
+    let (signing_key_b, ephemeral_pk_b) = generate_dilithium_keypair();
+    let history_root_b = sha3_256(b"disentangle-genesis-b-history");
+    let simhash_b = SimHash::from_structural(&[], &history_root_b);
+    let sk_hash_b = sha3_256(&signing_key_b.to_bytes()[..32]);
+    let nullifier_b = Nullifier::compute(&sk_hash_b, Epoch(0), b"genesis-b");
+    let message_b = sha3_256(b"disentangle-genesis-b");
+    let signature_b = dilithium_sign(&signing_key_b, &message_b);
+
+    let mut genesis_b = Transaction {
+        id: [0u8; 32],
+        ephemeral_pk: ephemeral_pk_b,
+        signature: signature_b,
+        parents: vec![],
+        simhash: simhash_b,
+        nullifier: nullifier_b,
+        reputation_claim: 0,
+        confidential_outputs: vec![],
+        payload: None,
+    };
+    genesis_b.id = genesis_b.compute_id();
+    let genesis_b_id = genesis_b.id;
+
+    let wire_tx_b = WireTransaction::new(genesis_b, 0);
+    sync.receive_transaction(wire_tx_b);
+    info!("Genesis B created: {}", hex::encode(&genesis_b_id[..8]));
+    info!("Bootstrap node initialized with 2 genesis tips (MIN_PARENTS satisfied)");
 }
 
 fn mine_transaction(
@@ -757,7 +796,9 @@ fn mine_transaction(
     peer_id: PeerId,
 ) -> Option<WireTransaction> {
     let tips = sync.tips();
-    // Need at least MIN_PARENTS=2 tips to mine a valid transaction
+    // Need at least MIN_PARENTS=2 tips to mine a valid DAG transaction.
+    // The bootstrap node creates 2 genesis tips to satisfy this requirement.
+    // If tips < 2 (e.g. follower still syncing), skip and wait.
     if tips.len() < 2 {
         debug!("Skipping mine: only {} tip(s), need at least 2", tips.len());
         return None;
@@ -1151,37 +1192,75 @@ async fn handle_response(
     match response {
         DisentangleResponse::Tips(tip_ids) => {
             info!("Received {} tips from peer", tip_ids.len());
-            // Request each tip transaction to sync the DAG
-            for tip_id in tip_ids {
+            // Request each tip transaction to sync the DAG.
+            // If the tip has missing parents, the SyncState pending buffer
+            // will buffer it and return NeedParents, which triggers recursive
+            // parent fetching below.
+            for tip_id in &tip_ids {
+                info!("Requesting tip transaction: {}", hex::encode(&tip_id[..8]));
                 if let Some(peer) = peers.first() {
                     swarm
                         .behaviour_mut()
                         .request_response
-                        .send_request(peer, DisentangleRequest::GetTransaction(tip_id));
+                        .send_request(peer, DisentangleRequest::GetTransaction(*tip_id));
                 }
             }
         }
         DisentangleResponse::Transaction(Some(data)) => {
             if let Ok(wire_tx) = WireTransaction::decode(&data) {
                 let tx_id_hex = hex::encode(&wire_tx.tx.id[..8]);
+                let parent_count = wire_tx.tx.parents.len();
                 let mut sync = state.sync.lock().await;
-                if let SyncResult::NeedParents(more) = sync.receive_transaction(wire_tx) {
-                    drop(sync);
-                    for parent_id in more {
-                        if let Some(peer) = peers.first() {
-                            let request = DisentangleRequest::GetTransaction(parent_id);
-                            swarm
-                                .behaviour_mut()
-                                .request_response
-                                .send_request(peer, request);
+                match sync.receive_transaction(wire_tx) {
+                    SyncResult::NeedParents(missing) => {
+                        info!(
+                            "Transaction {} has {} parents, {} missing -- fetching ancestors",
+                            tx_id_hex,
+                            parent_count,
+                            missing.len()
+                        );
+                        drop(sync);
+                        for parent_id in missing {
+                            info!(
+                                "Requesting missing parent: {}",
+                                hex::encode(&parent_id[..8])
+                            );
+                            if let Some(peer) = peers.first() {
+                                let request = DisentangleRequest::GetTransaction(parent_id);
+                                swarm
+                                    .behaviour_mut()
+                                    .request_response
+                                    .send_request(peer, request);
+                            }
                         }
                     }
-                } else {
-                    info!("Synced transaction: {}", tx_id_hex);
+                    SyncResult::Inserted => {
+                        let dag_size = sync.transaction_count();
+                        let pending = sync.pending_count();
+                        drop(sync);
+                        info!(
+                            "Synced transaction: {} (DAG size: {}, pending: {})",
+                            tx_id_hex, dag_size, pending
+                        );
+                    }
+                    SyncResult::AlreadyHave | SyncResult::AlreadyPending => {
+                        debug!("Sync response: already have/pending {}", tx_id_hex);
+                    }
+                    SyncResult::InvalidPoW => {
+                        warn!(
+                            "Sync response: invalid PoW for {} (parents: {})",
+                            tx_id_hex, parent_count
+                        );
+                    }
+                    SyncResult::BufferFull => {
+                        warn!("Sync response: buffer full, could not accept {}", tx_id_hex);
+                    }
                 }
             }
         }
-        _ => {}
+        DisentangleResponse::Transaction(None) => {
+            warn!("Peer responded with None for requested transaction");
+        }
     }
 }
 
