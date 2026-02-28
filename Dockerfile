@@ -6,15 +6,20 @@ ARG TARGETARCH
 
 WORKDIR /app
 
-# Install cross-compilation toolchains if needed
+# Copy source first so rust-toolchain.toml is available before rustup/cargo
+COPY . .
+
+# Install cross-compilation toolchain and Rust target.
+# This must run AFTER COPY so that rust-toolchain.toml is in place —
+# otherwise rustup target add installs the stdlib for the Docker image's
+# default toolchain, but cargo later switches to the toolchain specified
+# in rust-toolchain.toml and the target stdlib is missing (error[E0463]).
 RUN case "$TARGETARCH" in \
         arm64) apt-get update && apt-get install -y gcc-aarch64-linux-gnu && \
+               rm -rf /var/lib/apt/lists/* && \
                rustup target add aarch64-unknown-linux-gnu ;; \
         amd64) rustup target add x86_64-unknown-linux-gnu ;; \
     esac
-
-# Copy the entire workspace
-COPY . .
 
 # Build the release binary for the target architecture
 RUN case "$TARGETARCH" in \
