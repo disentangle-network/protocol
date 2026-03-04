@@ -1,7 +1,7 @@
 services:
   # Bootstrap node (genesis creator)
   node-0:
-    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.1
     container_name: disentangle-node-0
     command: ["9000", "8000"]
     ports:
@@ -18,7 +18,7 @@ services:
 
   # Follower node 1
   node-1:
-    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.1
     container_name: disentangle-node-1
     command: ["9000", "8000", "/dns4/node-0/tcp/9000"]
     ports:
@@ -38,7 +38,7 @@ services:
 
   # Follower node 2
   node-2:
-    image: ghcr.io/disentangle-network/disentangle-node:v0.4.0
+    image: ghcr.io/disentangle-network/disentangle-node:v0.4.1
     container_name: disentangle-node-2
     command: ["9000", "8000", "/dns4/node-0/tcp/9000"]
     ports:
