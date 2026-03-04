@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-cli"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "clap",
  "dirs",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-consensus"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "disentangle-crypto",
  "disentangle-dag",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-crypto"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "hex",
@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-dag"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "disentangle-crypto",
  "disentangle-simhash",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-identity"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "bincode",
  "disentangle-crypto",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-node"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "async-stream",
  "axum",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-p2p"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "bincode",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-simhash"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "disentangle-crypto",
  "serde",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "disentangle-zkp"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "bincode",
  "criterion",

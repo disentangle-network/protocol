@@ -121,10 +121,7 @@ impl SyncState {
 
     fn insert_and_propagate(&mut self, wire_tx: WireTransaction) {
         let tx_id = wire_tx.tx.id;
-        for parent in &wire_tx.tx.parents {
-            self.tips.remove(parent);
-        }
-        self.tips.insert(tx_id);
+        let parents = wire_tx.tx.parents.clone();
         // Genesis transactions (no parents) bypass parent validation
         if wire_tx.tx.parents.is_empty() {
             self.dag.insert_genesis(wire_tx.tx);
@@ -132,6 +129,11 @@ impl SyncState {
             warn!("Failed to insert tx {:?}: {}", &tx_id[..4], e);
             return;
         }
+        // Update tips only after successful DAG insertion
+        for parent in &parents {
+            self.tips.remove(parent);
+        }
+        self.tips.insert(tx_id);
         self.request_counts.remove(&tx_id);
         info!("Inserted tx {:?}", &tx_id[..4]);
         if let Some(waiters) = self.waiting_for.remove(&tx_id) {
@@ -147,14 +149,16 @@ impl SyncState {
             while let Some(ready_id) = ready.pop_front() {
                 if let Some(pending) = self.pending.remove(&ready_id) {
                     let child_tx_id = pending.wire_tx.tx.id;
-                    for parent in &pending.wire_tx.tx.parents {
-                        self.tips.remove(parent);
-                    }
-                    self.tips.insert(child_tx_id);
+                    let child_parents = pending.wire_tx.tx.parents.clone();
                     if let Err(e) = self.dag.insert(pending.wire_tx.tx) {
                         warn!("Failed to insert pending tx {:?}: {}", &child_tx_id[..4], e);
                         continue;
                     }
+                    // Update tips only after successful DAG insertion
+                    for parent in &child_parents {
+                        self.tips.remove(parent);
+                    }
+                    self.tips.insert(child_tx_id);
                     self.request_counts.remove(&child_tx_id);
                     info!("Inserted pending tx {:?}", &child_tx_id[..4]);
                     if let Some(child_waiters) = self.waiting_for.remove(&child_tx_id) {
