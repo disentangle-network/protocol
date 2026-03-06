@@ -40,6 +40,7 @@ pub mod merkle;
 pub mod proof;
 pub mod range_circuit;
 pub mod reputation_bucket;
+pub mod stark_config;
 pub mod stealth;
 pub mod types;
 
