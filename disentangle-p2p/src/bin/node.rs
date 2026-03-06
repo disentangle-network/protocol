@@ -8,7 +8,7 @@ use disentangle_crypto::{
     signature::{generate_keypair as generate_dilithium_keypair, sign as dilithium_sign},
     types::{Epoch, Nullifier},
 };
-use disentangle_dag::{NodeId, Transaction, SCALE};
+use disentangle_dag::{NodeId, Transaction, MAX_PARENTS, MIN_PARENTS, SCALE};
 use disentangle_node::{identity_rpc, identity_state::IdentityStateManager, HelloWorldPoW};
 use disentangle_p2p::{
     behaviour::{DisentangleRequest, DisentangleResponse},
@@ -231,6 +231,30 @@ async fn submit_tx_handler(
         }
     }
 
+    // Validate parent count before doing any work
+    if parents.len() < MIN_PARENTS {
+        return Json(TxResponse {
+            success: false,
+            tx_id: None,
+            error: Some(format!(
+                "Too few parents: {} provided, minimum is {}",
+                parents.len(),
+                MIN_PARENTS
+            )),
+        });
+    }
+    if parents.len() > MAX_PARENTS {
+        return Json(TxResponse {
+            success: false,
+            tx_id: None,
+            error: Some(format!(
+                "Too many parents: {} provided, maximum is {}",
+                parents.len(),
+                MAX_PARENTS
+            )),
+        });
+    }
+
     let mut height = state.max_depth.lock().await;
     *height += 1;
     let block = *height;
@@ -275,23 +299,39 @@ async fn submit_tx_handler(
     let nonce = pow.mine(&tx_header);
     let wire_tx = WireTransaction::new(tx, nonce);
     let tx_id_hex = hex::encode(&tx_id[..8]);
-    if state
-        .cmd_tx
-        .send(NodeCommand::BroadcastTx(wire_tx))
-        .await
-        .is_err()
-    {
-        return Json(TxResponse {
-            success: false,
-            tx_id: None,
-            error: Some("Failed to send to P2P layer".into()),
-        });
+
+    // Insert locally first, then broadcast to peers
+    let mut sync = state.sync.lock().await;
+    match sync.receive_transaction(wire_tx.clone()) {
+        SyncResult::Inserted => {
+            drop(sync);
+            if state
+                .cmd_tx
+                .send(NodeCommand::BroadcastTx(wire_tx))
+                .await
+                .is_err()
+            {
+                return Json(TxResponse {
+                    success: false,
+                    tx_id: None,
+                    error: Some("Inserted locally but failed to broadcast to peers".into()),
+                });
+            }
+            Json(TxResponse {
+                success: true,
+                tx_id: Some(tx_id_hex),
+                error: None,
+            })
+        }
+        other => {
+            drop(sync);
+            Json(TxResponse {
+                success: false,
+                tx_id: None,
+                error: Some(format!("DAG rejected transaction: {:?}", other)),
+            })
+        }
     }
-    Json(TxResponse {
-        success: true,
-        tx_id: Some(tx_id_hex),
-        error: None,
-    })
 }
 
 async fn trigger_conflict_handler(State(state): State<SharedState>) -> Json<ConflictResponse> {
