@@ -11,6 +11,74 @@ use disentangle_crypto::{
 use disentangle_dag::{FixedPoint, SCALE};
 use serde::{Deserialize, Serialize};
 
+/// Capability tiers derived from composite coherence score.
+/// Each tier unlocks progressively more network capabilities.
+/// Thresholds are expressed as fractions of SCALE (65536).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum CoherenceTier {
+    /// Score < 10% SCALE (~6554). New or isolated nodes.
+    /// Can: read public state, submit basic transactions
+    Observer,
+    /// Score >= 10% SCALE. Established local presence.
+    /// Can: participate in consensus, receive delegations
+    Participant,
+    /// Score >= 30% SCALE (~19661). Significant network contribution.
+    /// Can: delegate capabilities, vote in governance, serve as introducer
+    Contributor,
+    /// Score >= 55% SCALE (~36045). Strong coherence across all dimensions.
+    /// Can: propose governance changes, serve as oracle, issue attestations
+    Authority,
+    /// Score >= 80% SCALE (~52429). Exceptional sustained coherence.
+    /// Can: manage network parameters, revoke capabilities, anchor trust
+    Steward,
+}
+
+impl CoherenceTier {
+    /// Threshold for Observer tier (always qualifies)
+    const OBSERVER_THRESHOLD: i64 = 0;
+    /// Threshold for Participant tier: 10% of SCALE
+    const PARTICIPANT_THRESHOLD: i64 = (SCALE as i64 * 10) / 100;
+    /// Threshold for Contributor tier: 30% of SCALE
+    const CONTRIBUTOR_THRESHOLD: i64 = (SCALE as i64 * 30) / 100;
+    /// Threshold for Authority tier: 55% of SCALE
+    const AUTHORITY_THRESHOLD: i64 = (SCALE as i64 * 55) / 100;
+    /// Threshold for Steward tier: 80% of SCALE
+    const STEWARD_THRESHOLD: i64 = (SCALE as i64 * 80) / 100;
+
+    /// Map a composite coherence score to its corresponding tier.
+    pub fn from_score(score: i64) -> CoherenceTier {
+        if score >= Self::STEWARD_THRESHOLD {
+            CoherenceTier::Steward
+        } else if score >= Self::AUTHORITY_THRESHOLD {
+            CoherenceTier::Authority
+        } else if score >= Self::CONTRIBUTOR_THRESHOLD {
+            CoherenceTier::Contributor
+        } else if score >= Self::PARTICIPANT_THRESHOLD {
+            CoherenceTier::Participant
+        } else {
+            CoherenceTier::Observer
+        }
+    }
+
+    /// Return the minimum composite score required for this tier.
+    pub fn minimum_score(&self) -> i64 {
+        match self {
+            CoherenceTier::Observer => Self::OBSERVER_THRESHOLD,
+            CoherenceTier::Participant => Self::PARTICIPANT_THRESHOLD,
+            CoherenceTier::Contributor => Self::CONTRIBUTOR_THRESHOLD,
+            CoherenceTier::Authority => Self::AUTHORITY_THRESHOLD,
+            CoherenceTier::Steward => Self::STEWARD_THRESHOLD,
+        }
+    }
+
+    /// Check whether this tier is sufficient to perform an action requiring `required` tier.
+    ///
+    /// Returns true if `self >= required`.
+    pub fn can_perform(&self, required: CoherenceTier) -> bool {
+        *self >= required
+    }
+}
+
 pub type CapabilityId = Hash256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,11 +221,26 @@ pub enum GovernanceScope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constraint {
-    TemporalBound { not_before: u64, not_after: u64 },
-    ReputationMinimum { bucket: u8 },
-    CoherenceMinimum { min_mass: u64 },
-    DelegationDepth { max_depth: u32 },
-    RequiresCapability { prerequisite: CapabilityId },
+    TemporalBound {
+        not_before: u64,
+        not_after: u64,
+    },
+    ReputationMinimum {
+        bucket: u8,
+    },
+    CoherenceMinimum {
+        min_mass: u64,
+    },
+    DelegationDepth {
+        max_depth: u32,
+    },
+    RequiresCapability {
+        prerequisite: CapabilityId,
+    },
+    /// Require the entity to hold at least the specified coherence tier.
+    TierMinimum {
+        tier: CoherenceTier,
+    },
 }
 
 impl Constraint {
@@ -176,6 +259,7 @@ impl Constraint {
             Self::RequiresCapability { prerequisite } => {
                 context.held_capabilities.contains(prerequisite)
             }
+            Self::TierMinimum { tier } => context.coherence_tier.can_perform(*tier),
         }
     }
 }
@@ -187,6 +271,8 @@ pub struct ConstraintContext {
     pub topological_mass: FixedPoint,
     pub current_delegation_depth: u32,
     pub held_capabilities: Vec<CapabilityId>,
+    /// The entity's current coherence tier, used for TierMinimum constraints.
+    pub coherence_tier: CoherenceTier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,6 +569,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
 
         assert!(constraint.is_satisfied(&context));
@@ -532,6 +619,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(constraint.is_satisfied(&context));
     }
@@ -545,6 +633,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(constraint.is_satisfied(&context));
     }
@@ -558,6 +647,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(!constraint.is_satisfied(&context));
     }
@@ -575,6 +665,7 @@ mod tests {
             topological_mass: 100 * SCALE, // exactly meets threshold
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(constraint.is_satisfied(&context));
     }
@@ -588,6 +679,7 @@ mod tests {
             topological_mass: 99 * SCALE, // just below threshold
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(!constraint.is_satisfied(&context));
     }
@@ -604,6 +696,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![[1u8; 32], prerequisite_id, [3u8; 32]],
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(constraint.is_satisfied(&context));
     }
@@ -620,6 +713,7 @@ mod tests {
             topological_mass: 0,
             current_delegation_depth: 0,
             held_capabilities: vec![[1u8; 32], [2u8; 32]], // does not contain prerequisite
+            coherence_tier: CoherenceTier::Observer,
         };
         assert!(!constraint.is_satisfied(&context));
     }
@@ -650,6 +744,7 @@ mod tests {
             topological_mass: 200 * SCALE,
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
 
         assert!(cap.check_constraints(&context));
@@ -679,6 +774,7 @@ mod tests {
             topological_mass: 50 * SCALE, // too low for CoherenceMinimum
             current_delegation_depth: 0,
             held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Observer,
         };
 
         assert!(!cap.check_constraints(&context));
@@ -733,5 +829,185 @@ mod tests {
 
         // Empty chain should verify
         assert!(DelegationRecord::verify_chain(&[], &cap, &[]));
+    }
+
+    // ── CoherenceTier tests ──
+
+    #[test]
+    fn test_tier_from_score_boundaries() {
+        // Compute exact thresholds from integer arithmetic
+        let participant_threshold = (SCALE as i64 * 10) / 100; // 6553
+        let contributor_threshold = (SCALE as i64 * 30) / 100; // 19660
+        let authority_threshold = (SCALE as i64 * 55) / 100; // 36044
+        let steward_threshold = (SCALE as i64 * 80) / 100; // 52428
+
+        // Observer: score < participant_threshold
+        assert_eq!(CoherenceTier::from_score(0), CoherenceTier::Observer);
+        assert_eq!(
+            CoherenceTier::from_score(participant_threshold - 1),
+            CoherenceTier::Observer
+        );
+
+        // Participant: participant_threshold <= score < contributor_threshold
+        assert_eq!(
+            CoherenceTier::from_score(participant_threshold),
+            CoherenceTier::Participant
+        );
+        assert_eq!(
+            CoherenceTier::from_score(contributor_threshold - 1),
+            CoherenceTier::Participant
+        );
+
+        // Contributor: contributor_threshold <= score < authority_threshold
+        assert_eq!(
+            CoherenceTier::from_score(contributor_threshold),
+            CoherenceTier::Contributor
+        );
+        assert_eq!(
+            CoherenceTier::from_score(authority_threshold - 1),
+            CoherenceTier::Contributor
+        );
+
+        // Authority: authority_threshold <= score < steward_threshold
+        assert_eq!(
+            CoherenceTier::from_score(authority_threshold),
+            CoherenceTier::Authority
+        );
+        assert_eq!(
+            CoherenceTier::from_score(steward_threshold - 1),
+            CoherenceTier::Authority
+        );
+
+        // Steward: score >= steward_threshold
+        assert_eq!(
+            CoherenceTier::from_score(steward_threshold),
+            CoherenceTier::Steward
+        );
+        assert_eq!(
+            CoherenceTier::from_score(SCALE as i64),
+            CoherenceTier::Steward
+        );
+    }
+
+    #[test]
+    fn test_tier_ordering() {
+        assert!(CoherenceTier::Observer < CoherenceTier::Participant);
+        assert!(CoherenceTier::Participant < CoherenceTier::Contributor);
+        assert!(CoherenceTier::Contributor < CoherenceTier::Authority);
+        assert!(CoherenceTier::Authority < CoherenceTier::Steward);
+    }
+
+    #[test]
+    fn test_tier_can_perform() {
+        // Steward can perform everything
+        assert!(CoherenceTier::Steward.can_perform(CoherenceTier::Observer));
+        assert!(CoherenceTier::Steward.can_perform(CoherenceTier::Participant));
+        assert!(CoherenceTier::Steward.can_perform(CoherenceTier::Contributor));
+        assert!(CoherenceTier::Steward.can_perform(CoherenceTier::Authority));
+        assert!(CoherenceTier::Steward.can_perform(CoherenceTier::Steward));
+
+        // Observer can only perform Observer-level actions
+        assert!(CoherenceTier::Observer.can_perform(CoherenceTier::Observer));
+        assert!(!CoherenceTier::Observer.can_perform(CoherenceTier::Participant));
+        assert!(!CoherenceTier::Observer.can_perform(CoherenceTier::Contributor));
+        assert!(!CoherenceTier::Observer.can_perform(CoherenceTier::Authority));
+        assert!(!CoherenceTier::Observer.can_perform(CoherenceTier::Steward));
+
+        // Contributor can perform Observer, Participant, and Contributor
+        assert!(CoherenceTier::Contributor.can_perform(CoherenceTier::Observer));
+        assert!(CoherenceTier::Contributor.can_perform(CoherenceTier::Participant));
+        assert!(CoherenceTier::Contributor.can_perform(CoherenceTier::Contributor));
+        assert!(!CoherenceTier::Contributor.can_perform(CoherenceTier::Authority));
+        assert!(!CoherenceTier::Contributor.can_perform(CoherenceTier::Steward));
+    }
+
+    #[test]
+    fn test_tier_minimum_score() {
+        assert_eq!(CoherenceTier::Observer.minimum_score(), 0);
+        assert_eq!(
+            CoherenceTier::Participant.minimum_score(),
+            (SCALE as i64 * 10) / 100
+        );
+        assert_eq!(
+            CoherenceTier::Contributor.minimum_score(),
+            (SCALE as i64 * 30) / 100
+        );
+        assert_eq!(
+            CoherenceTier::Authority.minimum_score(),
+            (SCALE as i64 * 55) / 100
+        );
+        assert_eq!(
+            CoherenceTier::Steward.minimum_score(),
+            (SCALE as i64 * 80) / 100
+        );
+    }
+
+    #[test]
+    fn test_tier_minimum_constraint() {
+        let constraint = Constraint::TierMinimum {
+            tier: CoherenceTier::Contributor,
+        };
+
+        // Contributor meets Contributor requirement
+        let context_pass = ConstraintContext {
+            current_depth: 0,
+            reputation_bucket: 0,
+            topological_mass: 0,
+            current_delegation_depth: 0,
+            held_capabilities: vec![],
+            coherence_tier: CoherenceTier::Contributor,
+        };
+        assert!(constraint.is_satisfied(&context_pass));
+
+        // Authority exceeds Contributor requirement
+        let context_exceeds = ConstraintContext {
+            coherence_tier: CoherenceTier::Authority,
+            ..context_pass.clone()
+        };
+        assert!(constraint.is_satisfied(&context_exceeds));
+
+        // Observer is below Contributor requirement
+        let context_fail = ConstraintContext {
+            coherence_tier: CoherenceTier::Observer,
+            ..context_pass.clone()
+        };
+        assert!(!constraint.is_satisfied(&context_fail));
+
+        // Participant is below Contributor requirement
+        let context_below = ConstraintContext {
+            coherence_tier: CoherenceTier::Participant,
+            ..context_pass
+        };
+        assert!(!constraint.is_satisfied(&context_below));
+    }
+
+    #[test]
+    fn test_tier_serialization_roundtrip() {
+        let tiers = [
+            CoherenceTier::Observer,
+            CoherenceTier::Participant,
+            CoherenceTier::Contributor,
+            CoherenceTier::Authority,
+            CoherenceTier::Steward,
+        ];
+
+        for tier in &tiers {
+            let serialized = bincode::serialize(tier).unwrap();
+            let deserialized: CoherenceTier = bincode::deserialize(&serialized).unwrap();
+            assert_eq!(*tier, deserialized);
+        }
+
+        // Also test roundtrip within a Constraint
+        let constraint = Constraint::TierMinimum {
+            tier: CoherenceTier::Authority,
+        };
+        let serialized = bincode::serialize(&constraint).unwrap();
+        let deserialized: Constraint = bincode::deserialize(&serialized).unwrap();
+        match deserialized {
+            Constraint::TierMinimum { tier } => {
+                assert_eq!(tier, CoherenceTier::Authority);
+            }
+            other => panic!("Expected TierMinimum, got: {:?}", other),
+        }
     }
 }

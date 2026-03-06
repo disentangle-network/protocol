@@ -33,8 +33,8 @@ pub use agreement::{
     ServiceAgreement, SettlementAgreement,
 };
 pub use capability::{
-    AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, Constraint,
-    ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
+    AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, CoherenceTier,
+    Constraint, ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
     TransactionScope,
 };
 pub use coherence::{

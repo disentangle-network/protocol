@@ -2,6 +2,7 @@
 //!
 //! Measures topological mass and coherence for DIDs.
 
+use crate::capability::CoherenceTier;
 use crate::did::DID;
 use crate::graph::IdentityGraph;
 use disentangle_dag::{fp_mul, FixedPoint, MIN_CURVATURE_WEIGHT, SCALE};
@@ -164,6 +165,11 @@ impl CoherenceProfile {
             + depth_component
             + capability_component
             + introduction_component) as FixedPoint
+    }
+
+    /// Determine the coherence tier for this profile at the given depth.
+    pub fn coherence_tier(&self, current_depth: u64) -> CoherenceTier {
+        CoherenceTier::from_score(self.composite_score(current_depth) as i64)
     }
 }
 
@@ -621,5 +627,69 @@ mod tests {
         // 15% of SCALE (capability) + 10% of SCALE (introduction)
         let expected_diff = (SCALE as i64 * 15 / 100 + SCALE as i64 * 10 / 100) as FixedPoint;
         assert_eq!(score_with - score_without, expected_diff);
+    }
+
+    // ── Coherence tier from profile ──
+
+    #[test]
+    fn test_coherence_profile_tier() {
+        use crate::capability::CoherenceTier;
+
+        // Observer: a profile with zero mass and no contributions
+        let observer_profile = CoherenceProfile {
+            did: DID("observer".to_string()),
+            topological_mass: 0,
+            mean_local_curvature: 0,
+            relational_diversity: 0,
+            temporal_depth: 0,
+            capability_coherence: 0,
+            introduction_coherence: 0,
+            last_active_depth: 100,
+        };
+        assert_eq!(
+            observer_profile.coherence_tier(100),
+            CoherenceTier::Observer
+        );
+
+        // Steward: a profile with maximal values across all dimensions.
+        // composite_score = 30% mass + 20% curvature + 15% diversity + 10% depth
+        //                 + 15% capability + 10% introduction
+        // With all components at SCALE: 30+20+15+10+15+10 = 100% of SCALE
+        let steward_profile = CoherenceProfile {
+            did: DID("steward".to_string()),
+            topological_mass: SCALE,
+            mean_local_curvature: SCALE,
+            relational_diversity: 100,
+            temporal_depth: 100_000,
+            capability_coherence: SCALE,
+            introduction_coherence: SCALE,
+            last_active_depth: 100,
+        };
+        assert_eq!(steward_profile.coherence_tier(100), CoherenceTier::Steward);
+
+        // Contributor: a profile in the 30-55% range.
+        // Target ~35% of SCALE composite score.
+        // mass_component = (SCALE * 30) / 100 is 30% of SCALE from mass alone.
+        // Add a bit from other components to land in Contributor range.
+        let contributor_profile = CoherenceProfile {
+            did: DID("contributor".to_string()),
+            topological_mass: SCALE,         // 30% * SCALE
+            mean_local_curvature: SCALE / 4, // 20% * SCALE/4 = 5% SCALE
+            relational_diversity: 0,
+            temporal_depth: 0,
+            capability_coherence: 0,
+            introduction_coherence: 0,
+            last_active_depth: 100,
+        };
+        let score = contributor_profile.composite_score(100);
+        // 30% + 5% = 35% of SCALE -> Contributor
+        assert_eq!(
+            CoherenceTier::from_score(score as i64),
+            CoherenceTier::Contributor
+        );
+        assert_eq!(
+            contributor_profile.coherence_tier(100),
+            CoherenceTier::Contributor
+        );
     }
 }

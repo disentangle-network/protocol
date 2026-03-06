@@ -351,6 +351,7 @@ impl IdentityStateManager {
             topological_mass: coherence_profile.topological_mass,
             current_delegation_depth: chain.map(|c| c.len() as u32).unwrap_or(0),
             held_capabilities: vec![], // TODO: query held capabilities
+            coherence_tier: coherence_profile.coherence_tier(self.current_depth),
         };
 
         // Check all constraints
