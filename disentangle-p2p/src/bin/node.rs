@@ -518,6 +518,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/identity/:did",
             axum::routing::delete(identity_rpc::identity_deactivate_handler),
         )
+        .route(
+            "/identity/:did",
+            axum::routing::put(identity_rpc::identity_update_handler),
+        )
         .route("/identity", get(identity_rpc::identity_list_handler))
         // Capability endpoints
         .route(

@@ -32,6 +32,10 @@ fn create_test_router() -> Router {
             "/identity/:did",
             axum::routing::delete(identity_deactivate_handler),
         )
+        .route(
+            "/identity/:did",
+            axum::routing::put(identity_update_handler),
+        )
         // Capability endpoints
         .route(
             "/capability/create",
@@ -129,6 +133,25 @@ async fn get_request(router: &Router, path: &str) -> (StatusCode, Value) {
 async fn delete_request(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("DELETE")
+        .uri(path)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
+
+    (status, body_json)
+}
+
+/// Helper to send a PUT request with JSON body
+async fn put_json(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("PUT")
         .uri(path)
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_string(&body).unwrap()))
@@ -1645,4 +1668,154 @@ async fn test_combined_delegation_and_coherence_constraint() {
         "Error should indicate constraint failure, got: {}",
         response["error"]
     );
+}
+
+// ============================================================================
+// DID UPDATE ENDPOINT TESTS
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_identity_add_service() {
+    let router = create_test_router();
+
+    // Register an identity
+    let body = json!({"agent_type": "human"});
+    let (_, register_response) = post_json(&router, "/identity/register", body).await;
+    let did = register_response["did"].as_str().unwrap().to_string();
+    let sk_hex = register_response["signing_key_hex"].as_str().unwrap();
+
+    // Reconstruct the signing key
+    let sk_bytes = hex::decode(sk_hex).unwrap();
+    let sk = SigningKey::from_bytes(&sk_bytes).unwrap();
+
+    // Build the update operations (must match what the handler constructs)
+    let ops = vec![disentangle_identity::DIDUpdateOp::AddService(
+        disentangle_identity::ServiceEndpoint {
+            id: "svc-rpc-1".to_string(),
+            service_type: "MessagingService".to_string(),
+            endpoint: "https://example.com/msg".to_string(),
+        },
+    )];
+
+    // Sign the update proof (same domain separation as update_did)
+    let mut message = Vec::new();
+    message.extend_from_slice(b"DID_UPDATE_V1");
+    message.extend_from_slice(&bincode::serialize(&ops).unwrap());
+    let proof = sign(&sk, &message);
+    let proof_hex = hex::encode(proof.to_bytes());
+
+    // Send the update request
+    let update_body = json!({
+        "add_service_endpoints": [{
+            "id": "svc-rpc-1",
+            "service_type": "MessagingService",
+            "endpoint": "https://example.com/msg"
+        }],
+        "proof_hex": proof_hex
+    });
+
+    let (status, response) = put_json(&router, &format!("/identity/{}", did), update_body).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Update should succeed. Response: {:?}",
+        response
+    );
+    assert!(response["document"].is_object());
+
+    // Verify the service endpoint was added
+    let services = &response["document"]["service"];
+    assert!(services.is_array());
+    assert_eq!(services.as_array().unwrap().len(), 1);
+    assert_eq!(services[0]["id"], "svc-rpc-1");
+    assert_eq!(services[0]["service_type"], "MessagingService");
+    assert_eq!(services[0]["endpoint"], "https://example.com/msg");
+
+    // Verify change persists via GET
+    let (get_status, get_response) = get_request(&router, &format!("/identity/{}", did)).await;
+    assert_eq!(get_status, StatusCode::OK);
+    let get_services = &get_response["document"]["service"];
+    assert_eq!(get_services.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_update_identity_invalid_proof_rejected() {
+    let router = create_test_router();
+
+    // Register an identity
+    let body = json!({"agent_type": "human"});
+    let (_, register_response) = post_json(&router, "/identity/register", body).await;
+    let did = register_response["did"].as_str().unwrap().to_string();
+
+    // Send an update with an invalid proof
+    let update_body = json!({
+        "add_service_endpoints": [{
+            "id": "svc-bad",
+            "service_type": "BadService",
+            "endpoint": "https://bad.com"
+        }],
+        "proof_hex": "deadbeef"
+    });
+
+    let (status, response) = put_json(&router, &format!("/identity/{}", did), update_body).await;
+
+    // Should fail -- invalid proof
+    assert_ne!(status, StatusCode::OK);
+    assert!(response["error"].is_string());
+
+    // Verify DID is unchanged (no service endpoints added)
+    let (get_status, get_response) = get_request(&router, &format!("/identity/{}", did)).await;
+    assert_eq!(get_status, StatusCode::OK);
+    let services = &get_response["document"]["service"];
+    assert!(
+        services.as_array().unwrap().is_empty(),
+        "Service endpoints should not be modified by failed update"
+    );
+}
+
+#[tokio::test]
+async fn test_update_identity_nonexistent_did() {
+    let router = create_test_router();
+
+    let update_body = json!({
+        "add_service_endpoints": [{
+            "id": "svc-phantom",
+            "service_type": "PhantomService",
+            "endpoint": "https://phantom.com"
+        }],
+        "proof_hex": "aabb"
+    });
+
+    let (status, _) = put_json(
+        &router,
+        "/identity/did:disentangle:nonexistent",
+        update_body,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_update_identity_no_ops() {
+    let router = create_test_router();
+
+    // Register an identity
+    let body = json!({"agent_type": "human"});
+    let (_, register_response) = post_json(&router, "/identity/register", body).await;
+    let did = register_response["did"].as_str().unwrap().to_string();
+
+    // Send an update with no operations (just a proof)
+    let update_body = json!({
+        "proof_hex": "aabb"
+    });
+
+    let (status, response) = put_json(&router, &format!("/identity/{}", did), update_body).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(response["error"]
+        .as_str()
+        .unwrap()
+        .contains("No update operations"));
 }
