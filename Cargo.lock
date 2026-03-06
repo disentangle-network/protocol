@@ -1047,6 +1047,7 @@ name = "disentangle-zkp"
 version = "0.4.1"
 dependencies = [
  "bincode",
+ "chacha20poly1305",
  "criterion",
  "disentangle-crypto",
  "p3-air",
