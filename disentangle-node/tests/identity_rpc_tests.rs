@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
+use disentangle_crypto::signature::{sign, SigningKey};
 use disentangle_node::identity_rpc::*;
 use disentangle_node::identity_state::IdentityStateManager;
 use serde_json::{json, Value};
@@ -265,11 +266,21 @@ async fn test_deactivate_identity() {
     // Register an identity
     let body = json!({"agent_type": "human"});
     let (_, register_response) = post_json(&router, "/identity/register", body).await;
-    let did = register_response["did"].as_str().unwrap();
+    let did = register_response["did"].as_str().unwrap().to_string();
+    let sk_hex = register_response["signing_key_hex"].as_str().unwrap();
 
-    // Deactivate it (using dummy proof for now)
+    // Reconstruct the signing key and produce a valid deactivation proof
+    let sk_bytes = hex::decode(sk_hex).unwrap();
+    let sk = SigningKey::from_bytes(&sk_bytes).unwrap();
+
+    let mut message = Vec::new();
+    message.extend_from_slice(b"DID_DEACTIVATE_V1");
+    message.extend_from_slice(did.as_bytes());
+    let proof = sign(&sk, &message);
+    let proof_hex = hex::encode(proof.to_bytes());
+
     let deactivate_body = json!({
-        "proof_hex": "deadbeef"
+        "proof_hex": proof_hex
     });
 
     let (status, response) =
@@ -281,6 +292,35 @@ async fn test_deactivate_identity() {
     // Verify it's gone
     let (get_status, _) = get_request(&router, &format!("/identity/{}", did)).await;
     assert_eq!(get_status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_deactivate_identity_invalid_proof() {
+    let router = create_test_router();
+
+    // Register an identity
+    let body = json!({"agent_type": "human"});
+    let (_, register_response) = post_json(&router, "/identity/register", body).await;
+    let did = register_response["did"].as_str().unwrap().to_string();
+
+    // Attempt deactivation with a dummy/wrong proof (valid hex, invalid signature)
+    let deactivate_body = json!({
+        "proof_hex": "deadbeef"
+    });
+
+    let (status, response) =
+        delete_request(&router, &format!("/identity/{}", did), deactivate_body).await;
+
+    // Should fail because the proof doesn't verify
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response["error"]
+        .as_str()
+        .unwrap()
+        .contains("Failed to deactivate DID"));
+
+    // Verify the DID is still registered (not deactivated)
+    let (get_status, _) = get_request(&router, &format!("/identity/{}", did)).await;
+    assert_eq!(get_status, StatusCode::OK);
 }
 
 #[tokio::test]
