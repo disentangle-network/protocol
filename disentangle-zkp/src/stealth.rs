@@ -3,6 +3,10 @@
 //! Allows sending to recipients without revealing their public key on-chain.
 
 use crate::confidential::AmountCommitment;
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Nonce,
+};
 use disentangle_crypto::hash::{sha3_256_multi, Hash256};
 use disentangle_crypto::kem::{
     decapsulate, encapsulate, Ciphertext, DecapsulationKey, EncapsulationKey, SharedSecret,
@@ -84,8 +88,7 @@ impl ConfidentialOutput {
         let (stealth_address, ephemeral_ciphertext, shared_secret) =
             generate_stealth_address(recipient_ek);
 
-        // Encrypt amount using shared secret as key
-        // Using simple XOR for now (should use ChaCha20-Poly1305 in production)
+        // Encrypt amount and blinding using ChaCha20-Poly1305 (AEAD)
         let encrypted_amount = encrypt_amount(amount, &blinding, shared_secret.as_bytes());
 
         Self {
@@ -120,39 +123,48 @@ impl ConfidentialOutput {
     }
 }
 
-/// Encrypt amount and blinding factor.
-/// In production, use ChaCha20-Poly1305.
+/// Encrypt amount and blinding factor using ChaCha20-Poly1305 (AEAD).
+///
+/// Returns ciphertext (40 bytes) + auth tag (16 bytes) = 56 bytes total.
 fn encrypt_amount(amount: u64, blinding: &[u8; 32], key: &[u8; 32]) -> Vec<u8> {
-    let mut data = Vec::with_capacity(40);
-    data.extend_from_slice(&amount.to_le_bytes());
-    data.extend_from_slice(blinding);
+    let mut plaintext = Vec::with_capacity(40);
+    plaintext.extend_from_slice(&amount.to_le_bytes());
+    plaintext.extend_from_slice(blinding);
 
-    // Simple XOR encryption (replace with ChaCha20-Poly1305)
-    let key_stream = sha3_256_multi(&[b"ENCRYPT_STREAM", key]);
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key_stream[i % 32];
-    }
+    let enc_key = sha3_256_multi(&[b"STEALTH_ENC_KEY_V2", key]);
+    let nonce_bytes = sha3_256_multi(&[b"STEALTH_ENC_NONCE_V2", key]);
+    let nonce = Nonce::from_slice(&nonce_bytes[..12]);
 
-    data
+    let cipher = ChaCha20Poly1305::new_from_slice(&enc_key)
+        .expect("ChaCha20Poly1305 key length is always 32 bytes");
+
+    cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .expect("ChaCha20Poly1305 encryption should not fail with valid key/nonce")
 }
 
-/// Decrypt amount and blinding factor.
+/// Decrypt amount and blinding factor using ChaCha20-Poly1305 (AEAD).
+///
+/// Expects 56 bytes: 40 bytes ciphertext + 16 bytes auth tag.
 fn decrypt_amount(encrypted: &[u8], key: &[u8; 32]) -> Result<(u64, [u8; 32]), StealthError> {
-    if encrypted.len() != 40 {
+    if encrypted.len() != 56 {
         return Err(StealthError::InvalidEncryptedData);
     }
 
-    let mut data = encrypted.to_vec();
+    let enc_key = sha3_256_multi(&[b"STEALTH_ENC_KEY_V2", key]);
+    let nonce_bytes = sha3_256_multi(&[b"STEALTH_ENC_NONCE_V2", key]);
+    let nonce = Nonce::from_slice(&nonce_bytes[..12]);
 
-    // XOR decryption
-    let key_stream = sha3_256_multi(&[b"ENCRYPT_STREAM", key]);
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key_stream[i % 32];
-    }
+    let cipher = ChaCha20Poly1305::new_from_slice(&enc_key)
+        .expect("ChaCha20Poly1305 key length is always 32 bytes");
 
-    let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
+    let plaintext = cipher
+        .decrypt(nonce, encrypted)
+        .map_err(|_| StealthError::DecryptionFailed)?;
+
+    let amount = u64::from_le_bytes(plaintext[0..8].try_into().unwrap());
     let mut blinding = [0u8; 32];
-    blinding.copy_from_slice(&data[8..40]);
+    blinding.copy_from_slice(&plaintext[8..40]);
 
     Ok((amount, blinding))
 }
@@ -167,6 +179,8 @@ pub enum StealthError {
     CommitmentMismatch,
     #[error("invalid encrypted data length")]
     InvalidEncryptedData,
+    #[error("decryption failed: authentication tag verification failed")]
+    DecryptionFailed,
 }
 
 #[cfg(test)]
@@ -251,13 +265,59 @@ mod tests {
     #[test]
     fn test_decrypt_wrong_length() {
         let key = [1u8; 32];
-        let wrong_data = vec![0u8; 30]; // Wrong length
+        let wrong_data = vec![0u8; 30]; // Wrong length (expected 56)
 
         let result = decrypt_amount(&wrong_data, &key);
         assert!(result.is_err());
         match result {
             Err(StealthError::InvalidEncryptedData) => {}
             _ => panic!("Expected InvalidEncryptedData error"),
+        }
+
+        // Also verify that the old length (40) is rejected
+        let old_length_data = vec![0u8; 40];
+        let result = decrypt_amount(&old_length_data, &key);
+        assert!(result.is_err());
+        match result {
+            Err(StealthError::InvalidEncryptedData) => {}
+            _ => panic!("Expected InvalidEncryptedData error for old 40-byte format"),
+        }
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_rejected() {
+        let amount = 5000u64;
+        let blinding = [77u8; 32];
+        let key = [42u8; 32];
+
+        let mut encrypted = encrypt_amount(amount, &blinding, &key);
+        assert_eq!(encrypted.len(), 56);
+
+        // Tamper with a byte of the ciphertext
+        encrypted[0] ^= 0xFF;
+
+        let result = decrypt_amount(&encrypted, &key);
+        assert!(result.is_err());
+        match result {
+            Err(StealthError::DecryptionFailed) => {}
+            other => panic!("Expected DecryptionFailed error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wrong_key_decryption_fails() {
+        let amount = 12345u64;
+        let blinding = [88u8; 32];
+        let key1 = [1u8; 32];
+        let key2 = [2u8; 32];
+
+        let encrypted = encrypt_amount(amount, &blinding, &key1);
+
+        let result = decrypt_amount(&encrypted, &key2);
+        assert!(result.is_err());
+        match result {
+            Err(StealthError::DecryptionFailed) => {}
+            other => panic!("Expected DecryptionFailed error, got: {other:?}"),
         }
     }
 }
