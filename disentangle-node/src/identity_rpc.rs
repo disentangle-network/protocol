@@ -13,8 +13,8 @@ use axum::{
 };
 use disentangle_crypto::signature::SigningKey;
 use disentangle_identity::{
-    AgentType, CapabilitySubject, Constraint, OracleQuery, ProposalType, RegionSelector,
-    RevocationScope, VoteChoice,
+    AgentType, CapabilitySubject, Constraint, DIDUpdateOp, OracleQuery, ProposalType,
+    RegionSelector, RevocationScope, ServiceEndpoint, VoteChoice,
 };
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -190,6 +190,125 @@ pub async fn identity_deactivate_handler(
     })?;
 
     Ok(Json(SuccessResponse { success: true }))
+}
+
+// Update endpoint
+
+#[derive(Deserialize)]
+pub struct UpdateServiceEndpoint {
+    pub id: String,
+    pub service_type: String,
+    pub endpoint: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateIdentityRequest {
+    #[serde(default)]
+    pub add_service_endpoints: Vec<UpdateServiceEndpoint>,
+    #[serde(default)]
+    pub remove_service_ids: Vec<String>,
+    #[serde(default)]
+    pub new_agent_type: Option<String>,
+    pub proof_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct UpdateIdentityResponse {
+    pub document: serde_json::Value,
+}
+
+pub async fn identity_update_handler(
+    State(state): State<IdentityState>,
+    Path(did): Path<String>,
+    Json(req): Json<UpdateIdentityRequest>,
+) -> Result<Json<UpdateIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let proof = hex::decode(&req.proof_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid proof hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    // Build the update operations from the request
+    let mut ops: Vec<DIDUpdateOp> = Vec::new();
+
+    for ep in &req.add_service_endpoints {
+        ops.push(DIDUpdateOp::AddService(ServiceEndpoint {
+            id: ep.id.clone(),
+            service_type: ep.service_type.clone(),
+            endpoint: ep.endpoint.clone(),
+        }));
+    }
+
+    for service_id in &req.remove_service_ids {
+        ops.push(DIDUpdateOp::RemoveService(service_id.clone()));
+    }
+
+    if let Some(ref agent_type_str) = req.new_agent_type {
+        let agent_type = match agent_type_str.to_lowercase().as_str() {
+            "human" => AgentType::Human,
+            "agi" => AgentType::AGI {
+                runtime_attestation: None,
+            },
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!(
+                            "Invalid agent_type: must be 'human' or 'agi', got '{}'",
+                            agent_type_str
+                        ),
+                        coherence_score: None,
+                    }),
+                ))
+            }
+        };
+        ops.push(DIDUpdateOp::UpdateAgentType(agent_type));
+    }
+
+    if ops.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "No update operations provided".to_string(),
+                coherence_score: None,
+            }),
+        ));
+    }
+
+    let updated_doc = mgr.update_did(&did, ops, &proof).map_err(|e| {
+        let status = match &e {
+            disentangle_identity::IdentityError::DIDNotFound(_) => StatusCode::NOT_FOUND,
+            disentangle_identity::IdentityError::SignatureVerificationFailed => {
+                StatusCode::FORBIDDEN
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            status,
+            Json(ErrorResponse {
+                error: format!("Failed to update DID: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let doc_json = serde_json::to_value(&updated_doc).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize document: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(UpdateIdentityResponse { document: doc_json }))
 }
 
 // Capability endpoints

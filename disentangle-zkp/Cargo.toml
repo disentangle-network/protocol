@@ -30,6 +30,9 @@ p3-symmetric = "0.2"
 p3-uni-stark = "0.2"
 p3-util = "0.2"
 
+# Authenticated encryption
+chacha20poly1305 = "0.10"
+
 # Additional utilities
 rand.workspace = true
 bincode.workspace = true

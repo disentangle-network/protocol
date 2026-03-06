@@ -33,8 +33,8 @@ pub use agreement::{
     ServiceAgreement, SettlementAgreement,
 };
 pub use capability::{
-    AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, Constraint,
-    ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
+    AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, CoherenceTier,
+    Constraint, ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
     TransactionScope,
 };
 pub use coherence::{
@@ -43,7 +43,7 @@ pub use coherence::{
 };
 pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use did::{
-    AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
+    AgentType, DIDDocument, DIDError, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,
 };
 pub use governance::{

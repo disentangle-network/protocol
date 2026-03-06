@@ -100,6 +100,8 @@ pub enum TransactionPayload {
     RegisterIdentity { did_document: Vec<u8> },
     /// Deactivate a DID.
     DeactivateIdentity { did: String },
+    /// Update a DID document. updates is bincode-serialized Vec<DIDUpdateOp>.
+    UpdateIdentity { did: String, updates: Vec<u8> },
 
     // -- Social graph --
     /// Create an introduction between two DIDs.

@@ -10,21 +10,86 @@ use serde::{Deserialize, Serialize};
 
 pub type CapabilityRef = String;
 
+/// DID format prefix for all Disentangle DIDs.
+const DID_PREFIX: &str = "did:disentangle:";
+
+/// AGI sub-prefix (appears after the main prefix).
+const AGI_PREFIX: &str = "agi:";
+
+/// Expected length of the hex-encoded SHA3-256 hash (32 bytes = 64 hex chars).
+const HEX_HASH_LEN: usize = 64;
+
+/// Errors arising from DID parsing and validation.
+#[derive(Debug, thiserror::Error)]
+pub enum DIDError {
+    #[error("invalid DID format: {0}")]
+    InvalidFormat(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DID(pub String);
 
 impl DID {
     /// Create a new DID from a root public key.
     /// Format: did:disentangle:<hex(sha3_256(pk))> or did:disentangle:agi:<hex(sha3_256(pk))>
+    ///
+    /// This is the trusted internal constructor -- it always produces valid DIDs
+    /// from known-good key material. For parsing untrusted input, use [`DID::parse`].
     pub fn new(root_pk: &VerifyingKey, is_agi: bool) -> Self {
         let pk_hash = sha3_256(&root_pk.to_bytes());
         let hex_id = hex::encode(pk_hash);
 
         if is_agi {
-            Self(format!("did:disentangle:agi:{}", hex_id))
+            Self(format!("{}{}{}", DID_PREFIX, AGI_PREFIX, hex_id))
         } else {
-            Self(format!("did:disentangle:{}", hex_id))
+            Self(format!("{}{}", DID_PREFIX, hex_id))
         }
+    }
+
+    /// Parse and validate a DID string from untrusted input.
+    ///
+    /// Valid formats:
+    /// - `did:disentangle:<64 hex chars>` (human DID)
+    /// - `did:disentangle:agi:<64 hex chars>` (AGI DID)
+    ///
+    /// Returns `DIDError::InvalidFormat` with a descriptive message on failure.
+    pub fn parse(s: &str) -> Result<DID, DIDError> {
+        if s.is_empty() {
+            return Err(DIDError::InvalidFormat("empty string".to_string()));
+        }
+
+        let after_prefix = s.strip_prefix(DID_PREFIX).ok_or_else(|| {
+            DIDError::InvalidFormat(format!(
+                "must start with '{}', got '{}'",
+                DID_PREFIX,
+                &s[..s.len().min(20)]
+            ))
+        })?;
+
+        // Determine if this is an AGI DID and extract the hex portion
+        let hex_part = if let Some(after_agi) = after_prefix.strip_prefix(AGI_PREFIX) {
+            after_agi
+        } else {
+            after_prefix
+        };
+
+        // Validate hex length
+        if hex_part.len() != HEX_HASH_LEN {
+            return Err(DIDError::InvalidFormat(format!(
+                "expected {} hex characters after prefix, got {}",
+                HEX_HASH_LEN,
+                hex_part.len()
+            )));
+        }
+
+        // Validate hex characters
+        if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(DIDError::InvalidFormat(
+                "contains non-hex characters".to_string(),
+            ));
+        }
+
+        Ok(DID(s.to_string()))
     }
 
     /// Extract the method-specific ID portion (the part after did:disentangle:)
@@ -363,5 +428,61 @@ mod tests {
         // Verify id_hash is deterministic
         let hash2 = doc.id_hash();
         assert_eq!(hash, hash2);
+    }
+
+    // ── DID::parse validation tests ──
+
+    #[test]
+    fn test_did_parse_valid_human() {
+        let (_, pk) = generate_keypair();
+        let did = DID::new(&pk, false);
+        let parsed = DID::parse(&did.0).expect("valid human DID should parse");
+        assert_eq!(parsed, did);
+        assert!(!parsed.is_agi());
+    }
+
+    #[test]
+    fn test_did_parse_valid_agi() {
+        let (_, pk) = generate_keypair();
+        let did = DID::new(&pk, true);
+        let parsed = DID::parse(&did.0).expect("valid AGI DID should parse");
+        assert_eq!(parsed, did);
+        assert!(parsed.is_agi());
+    }
+
+    #[test]
+    fn test_did_parse_invalid_prefix() {
+        let err = DID::parse(
+            "did:example:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must start with"));
+    }
+
+    #[test]
+    fn test_did_parse_invalid_hex() {
+        // 64 chars but not all hex
+        let bad = format!("did:disentangle:{}zzzz", "a".repeat(60));
+        let err = DID::parse(&bad).unwrap_err();
+        assert!(err.to_string().contains("non-hex characters"));
+    }
+
+    #[test]
+    fn test_did_parse_wrong_length() {
+        // Too short (32 hex chars instead of 64)
+        let short = format!("did:disentangle:{}", "ab".repeat(16));
+        let err = DID::parse(&short).unwrap_err();
+        assert!(err.to_string().contains("expected 64 hex characters"));
+
+        // Too long (128 hex chars)
+        let long = format!("did:disentangle:{}", "ab".repeat(64));
+        let err = DID::parse(&long).unwrap_err();
+        assert!(err.to_string().contains("expected 64 hex characters"));
+    }
+
+    #[test]
+    fn test_did_parse_empty() {
+        let err = DID::parse("").unwrap_err();
+        assert!(err.to_string().contains("empty string"));
     }
 }
