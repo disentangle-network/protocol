@@ -5,11 +5,20 @@
 
 use crate::circuit::{ReputationAir, ReputationWitness};
 use crate::merkle::AccountMerkleTree;
+use crate::stark_config::{self, StarkConfigType};
 use crate::types::{AccountStateLeaf, ReputationClaim};
 use crate::{Result, ZkpError};
+
+use p3_baby_bear::BabyBear;
+use p3_field::AbstractField;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+use p3_uni_stark::Proof;
+
 use disentangle_crypto::hash::Hash256;
 
-use p3_matrix::Matrix;
+/// BabyBear prime modulus.
+const BABYBEAR_PRIME: u64 = 2013265921;
 
 /// Prover for reputation claims.
 pub struct ReputationProver {
@@ -79,16 +88,26 @@ impl ReputationProver {
             merkle_root: self.tree.root(),
         };
 
-        // Generate the execution trace
-        let trace = witness.generate_trace();
-        let _air = ReputationAir {
+        // Generate the execution trace and pad to power-of-2 rows
+        let trace = pad_trace_to_power_of_two(witness.generate_trace());
+        let air = ReputationAir {
             num_rows: trace.height(),
         };
 
-        // For now, we serialize the witness as the "proof"
-        // Full Plonky3 proving requires more setup (PCS, FRI config, etc.)
-        // This is a placeholder that will be replaced with actual STARK proving
-        let proof_data = serialize_witness_as_proof(&witness)?;
+        // Build public values: threshold and merkle root split into field elements
+        let public_values = build_public_values(threshold, &self.tree.root());
+
+        // Create the deterministic STARK config
+        let (config, perm) = stark_config::create_stark_config();
+        let mut challenger = stark_config::create_challenger(&perm);
+
+        // Generate the STARK proof
+        let stark_proof =
+            p3_uni_stark::prove(&config, &air, &mut challenger, trace, &public_values);
+
+        // Serialize the proof
+        let proof_data = bincode::serialize(&stark_proof)
+            .map_err(|e| ZkpError::SerializationError(e.to_string()))?;
 
         Ok(ReputationClaim::new(
             threshold,
@@ -133,25 +152,23 @@ impl ReputationVerifier {
             return Err(ZkpError::ProofVerificationFailed);
         }
 
-        // Deserialize and verify the proof
-        let witness = deserialize_witness_from_proof(&claim.proof_data)?;
+        // Deserialize the STARK proof
+        let stark_proof: Proof<StarkConfigType> = bincode::deserialize(&claim.proof_data)
+            .map_err(|e| ZkpError::SerializationError(e.to_string()))?;
 
-        // Verify Merkle path
-        if !verify_merkle_path(&witness) {
-            return Err(ZkpError::InvalidMerkleProof);
-        }
+        // Reconstruct the AIR (verifier only needs the structure, not the witness)
+        let air = ReputationAir::default();
 
-        // Verify reputation threshold
-        if witness.reputation_score < claim.threshold {
-            return Err(ZkpError::InsufficientReputation {
-                claimed: witness.reputation_score,
-                required: claim.threshold,
-            });
-        }
+        // Reconstruct public values from the claim's public fields
+        let public_values = build_public_values(claim.threshold, &claim.merkle_root);
 
-        // Note: In a real ZK system, the verifier would NOT have access to
-        // the witness. This is a placeholder implementation.
-        // The actual STARK verification would only use public inputs.
+        // Create a fresh config and challenger (must match prover's config exactly)
+        let (config, perm) = stark_config::create_stark_config();
+        let mut challenger = stark_config::create_challenger(&perm);
+
+        // Verify the STARK proof
+        p3_uni_stark::verify(&config, &air, &mut challenger, &stark_proof, &public_values)
+            .map_err(|_| ZkpError::ProofVerificationFailed)?;
 
         Ok(())
     }
@@ -163,101 +180,57 @@ impl Default for ReputationVerifier {
     }
 }
 
-/// Verify a Merkle path (helper for verification).
-fn verify_merkle_path(witness: &ReputationWitness) -> bool {
-    let mut current = witness.leaf_hash;
+/// Build the public values vector from threshold and merkle root.
+///
+/// Public values encode:
+/// - `[0]`: threshold (reduced mod BabyBear prime)
+/// - `[1]`: merkle_root low 4 bytes as u32 (reduced mod BabyBear prime)
+/// - `[2]`: merkle_root bytes 4..8 as u32 (reduced mod BabyBear prime)
+fn build_public_values(threshold: u64, merkle_root: &Hash256) -> Vec<BabyBear> {
+    vec![
+        u64_to_field(threshold),
+        bytes_to_field_u32(&merkle_root[0..4]),
+        bytes_to_field_u32(&merkle_root[4..8]),
+    ]
+}
 
-    for (sibling, &is_right) in witness.merkle_siblings.iter().zip(witness.path_bits.iter()) {
-        current = if is_right {
-            disentangle_crypto::hash::sha3_256_multi(&[b"MERKLE_NODE_V1", sibling, &current])
-        } else {
-            disentangle_crypto::hash::sha3_256_multi(&[b"MERKLE_NODE_V1", &current, sibling])
-        };
+/// Convert u64 to BabyBear field element (reduced mod prime).
+fn u64_to_field(val: u64) -> BabyBear {
+    BabyBear::from_canonical_u32((val % BABYBEAR_PRIME) as u32)
+}
+
+/// Convert 4 bytes (little-endian) to a BabyBear field element.
+fn bytes_to_field_u32(bytes: &[u8]) -> BabyBear {
+    let mut val: u32 = 0;
+    for (i, &b) in bytes.iter().take(4).enumerate() {
+        val |= (b as u32) << (i * 8);
+    }
+    BabyBear::from_canonical_u32(val % (BABYBEAR_PRIME as u32))
+}
+
+/// Minimum trace height for FRI compatibility.
+///
+/// FRI folding requires enough evaluation points for the query protocol
+/// to work. With `log_blowup: 2` and `num_queries: 28`, we need at least
+/// 2^3 = 8 rows to produce a valid proof.
+const MIN_TRACE_HEIGHT: usize = 8;
+
+/// Pad a trace to have a power-of-2 number of rows (minimum 8).
+///
+/// STARK proving requires traces with 2^k rows and FRI needs a minimum
+/// domain size. Zero rows are appended as needed.
+fn pad_trace_to_power_of_two(trace: RowMajorMatrix<BabyBear>) -> RowMajorMatrix<BabyBear> {
+    let width = trace.width();
+    let height = trace.height();
+    let target_height = height.next_power_of_two().max(MIN_TRACE_HEIGHT);
+
+    if height == target_height {
+        return trace;
     }
 
-    current == witness.merkle_root
-}
-
-/// Serialize witness as proof (placeholder for actual STARK proof).
-fn serialize_witness_as_proof(witness: &ReputationWitness) -> Result<Vec<u8>> {
-    bincode::serialize(witness).map_err(|e| ZkpError::SerializationError(e.to_string()))
-}
-
-/// Deserialize witness from proof (placeholder for actual STARK verification).
-fn deserialize_witness_from_proof(data: &[u8]) -> Result<ReputationWitness> {
-    bincode::deserialize(data).map_err(|e| ZkpError::SerializationError(e.to_string()))
-}
-
-// Add Serialize/Deserialize to ReputationWitness for the placeholder impl
-use serde::{Deserialize, Serialize};
-
-impl Serialize for ReputationWitness {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("ReputationWitness", 6)?;
-        s.serialize_field("reputation_score", &self.reputation_score)?;
-        s.serialize_field("threshold", &self.threshold)?;
-        s.serialize_field("leaf_hash", &self.leaf_hash.to_vec())?;
-        s.serialize_field(
-            "merkle_siblings",
-            &self
-                .merkle_siblings
-                .iter()
-                .map(|h| h.to_vec())
-                .collect::<Vec<_>>(),
-        )?;
-        s.serialize_field("path_bits", &self.path_bits)?;
-        s.serialize_field("merkle_root", &self.merkle_root.to_vec())?;
-        s.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ReputationWitness {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Helper {
-            reputation_score: u64,
-            threshold: u64,
-            leaf_hash: Vec<u8>,
-            merkle_siblings: Vec<Vec<u8>>,
-            path_bits: Vec<bool>,
-            merkle_root: Vec<u8>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-
-        let leaf_hash: [u8; 32] = helper
-            .leaf_hash
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("invalid leaf_hash length"))?;
-        let merkle_root: [u8; 32] = helper
-            .merkle_root
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("invalid merkle_root length"))?;
-        let merkle_siblings: Vec<[u8; 32]> = helper
-            .merkle_siblings
-            .into_iter()
-            .map(|v| {
-                v.try_into()
-                    .map_err(|_| serde::de::Error::custom("invalid sibling length"))
-            })
-            .collect::<std::result::Result<_, _>>()?;
-
-        Ok(ReputationWitness {
-            reputation_score: helper.reputation_score,
-            threshold: helper.threshold,
-            leaf_hash,
-            merkle_siblings,
-            path_bits: helper.path_bits,
-            merkle_root,
-        })
-    }
+    let mut values = trace.values;
+    values.resize(target_height * width, BabyBear::zero());
+    RowMajorMatrix::new(values, width)
 }
 
 #[cfg(test)]
