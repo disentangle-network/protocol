@@ -1,0 +1,17 @@
+[package]
+name = "disentangle-membrane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Coherence membrane research crate — frequency-selective coupling for forced enlightenment prevention"
+
+[dependencies]
+disentangle-simhash = { path = "../disentangle-simhash" }
+disentangle-crypto = { path = "../disentangle-crypto" }
+nalgebra = "0.33"
+rand.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1.4"
