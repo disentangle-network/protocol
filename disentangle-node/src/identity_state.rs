@@ -9,7 +9,7 @@ use disentangle_dag::{NodeId, TransactionPayload};
 use disentangle_identity::{
     evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
     CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, CommonsPool,
-    Constraint, ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument,
+    Constraint, ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument, DIDUpdateOp,
     DelegationRecord, DistributionRoot, ExcitabilityProfile, GovernanceProposal, GovernanceVote,
     IdentityError, IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus,
     IntroductionContext, IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal,
@@ -196,6 +196,93 @@ impl IdentityStateManager {
 
         self.did_registry.remove(did);
         Ok(())
+    }
+
+    /// Update a DID document (requires proof of ownership via signature verification).
+    ///
+    /// The `proof` must be a valid ML-DSA-87 signature over the domain-separated
+    /// update payload `b"DID_UPDATE_V1" || serialized_updates`, signed by the
+    /// verifying key stored alongside the DID in the registry.
+    ///
+    /// Supported operations (via `DIDUpdateOp`):
+    /// - `AddService` / `RemoveService`: modify service endpoints
+    /// - `UpdateAgentType`: change the agent type
+    /// - `AddVerificationMethod` / `RemoveVerificationMethod`: modify verification methods
+    ///   (note: key rotation is a separate, more privileged operation)
+    pub fn update_did(
+        &mut self,
+        did: &str,
+        updates: Vec<DIDUpdateOp>,
+        proof: &[u8],
+    ) -> Result<DIDDocument, IdentityError> {
+        let (_, pk) = self
+            .did_registry
+            .get(did)
+            .ok_or_else(|| IdentityError::DIDNotFound(did.to_string()))?;
+        let pk = pk.clone();
+
+        // Build the expected update payload (same domain separation as DIDUpdate transaction)
+        let mut message = Vec::new();
+        message.extend_from_slice(b"DID_UPDATE_V1");
+        if let Ok(updates_bytes) = bincode::serialize(&updates) {
+            message.extend_from_slice(&updates_bytes);
+        }
+
+        // Parse the proof bytes into a Signature and verify against the stored key
+        let signature = disentangle_crypto::signature::Signature::from_bytes(proof)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+
+        disentangle_crypto::signature::verify(&pk, &message, &signature)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+
+        // Apply updates to the stored DIDDocument
+        let (doc, _) = self
+            .did_registry
+            .get_mut(did)
+            .ok_or_else(|| IdentityError::DIDNotFound(did.to_string()))?;
+
+        for op in &updates {
+            match op {
+                DIDUpdateOp::AddService(endpoint) => {
+                    // Idempotent: only add if not already present
+                    if !doc.service.iter().any(|s| s.id == endpoint.id) {
+                        doc.service.push(endpoint.clone());
+                    }
+                }
+                DIDUpdateOp::RemoveService(service_id) => {
+                    doc.service.retain(|s| s.id != *service_id);
+                }
+                DIDUpdateOp::UpdateAgentType(agent_type) => {
+                    doc.agent_type = agent_type.clone();
+                }
+                DIDUpdateOp::AddVerificationMethod(method) => {
+                    if !doc.verification_methods.iter().any(|m| m.id == method.id) {
+                        doc.verification_methods.push(method.clone());
+                    }
+                }
+                DIDUpdateOp::RemoveVerificationMethod(method_id) => {
+                    doc.verification_methods.retain(|m| m.id != *method_id);
+                }
+            }
+        }
+
+        // Update the document's timestamp
+        doc.updated_depth = self.current_depth;
+
+        let updated_doc = doc.clone();
+
+        // Queue payload for federation broadcast
+        if let Ok(updates_bytes) = bincode::serialize(&updates) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::UpdateIdentity {
+                    did: did.to_string(),
+                    updates: updates_bytes,
+                },
+                signer_pk: pk,
+            });
+        }
+
+        Ok(updated_doc)
     }
 
     // Capability Operations
@@ -1658,6 +1745,45 @@ impl IdentityStateManager {
             TransactionPayload::DeactivateIdentity { did } => {
                 // Idempotent -- silently succeed if not found
                 self.did_registry.remove(did);
+                Ok(())
+            }
+
+            TransactionPayload::UpdateIdentity { did, updates } => {
+                // Skip if DID not found (may not have propagated yet)
+                let entry = match self.did_registry.get_mut(did) {
+                    Some(e) => e,
+                    None => return Ok(()),
+                };
+
+                let ops: Vec<DIDUpdateOp> = bincode::deserialize(updates).map_err(|e| {
+                    IdentityError::InvalidDID(format!("Failed to deserialize DIDUpdateOps: {}", e))
+                })?;
+
+                let doc = &mut entry.0;
+                for op in &ops {
+                    match op {
+                        DIDUpdateOp::AddService(endpoint) => {
+                            if !doc.service.iter().any(|s| s.id == endpoint.id) {
+                                doc.service.push(endpoint.clone());
+                            }
+                        }
+                        DIDUpdateOp::RemoveService(service_id) => {
+                            doc.service.retain(|s| s.id != *service_id);
+                        }
+                        DIDUpdateOp::UpdateAgentType(agent_type) => {
+                            doc.agent_type = agent_type.clone();
+                        }
+                        DIDUpdateOp::AddVerificationMethod(method) => {
+                            if !doc.verification_methods.iter().any(|m| m.id == method.id) {
+                                doc.verification_methods.push(method.clone());
+                            }
+                        }
+                        DIDUpdateOp::RemoveVerificationMethod(method_id) => {
+                            doc.verification_methods.retain(|m| m.id != *method_id);
+                        }
+                    }
+                }
+                doc.updated_depth = depth;
                 Ok(())
             }
 
@@ -3405,5 +3531,236 @@ mod tests {
 
         // DID should still be registered
         assert!(manager.get_did_document(&did.0).is_some());
+    }
+
+    // ── DID update proof verification tests ──
+
+    /// Helper to build the update proof message (same domain separation as update_did)
+    fn build_update_proof_message(updates: &[DIDUpdateOp]) -> Vec<u8> {
+        let mut message = Vec::new();
+        message.extend_from_slice(b"DID_UPDATE_V1");
+        if let Ok(updates_bytes) = bincode::serialize(updates) {
+            message.extend_from_slice(&updates_bytes);
+        }
+        message
+    }
+
+    #[test]
+    fn test_update_did_add_service_endpoints() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // Verify no service endpoints initially
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert!(doc.service.is_empty());
+
+        // Build update ops
+        let updates = vec![
+            DIDUpdateOp::AddService(disentangle_identity::ServiceEndpoint {
+                id: "svc-1".to_string(),
+                service_type: "MessagingService".to_string(),
+                endpoint: "https://example.com/msg".to_string(),
+            }),
+            DIDUpdateOp::AddService(disentangle_identity::ServiceEndpoint {
+                id: "svc-2".to_string(),
+                service_type: "StorageService".to_string(),
+                endpoint: "https://example.com/storage".to_string(),
+            }),
+        ];
+
+        let message = build_update_proof_message(&updates);
+        let proof = disentangle_crypto::signature::sign(&sk, &message);
+
+        let result = manager.update_did(&did.0, updates, proof.to_bytes());
+        assert!(result.is_ok());
+
+        let updated_doc = result.unwrap();
+        assert_eq!(updated_doc.service.len(), 2);
+        assert_eq!(updated_doc.service[0].id, "svc-1");
+        assert_eq!(updated_doc.service[1].id, "svc-2");
+
+        // Verify change persists in registry
+        let stored_doc = manager.get_did_document(&did.0).unwrap();
+        assert_eq!(stored_doc.service.len(), 2);
+    }
+
+    #[test]
+    fn test_update_did_remove_service_endpoint() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // First add a service
+        let add_ops = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-remove-me".to_string(),
+                service_type: "TempService".to_string(),
+                endpoint: "https://example.com/temp".to_string(),
+            },
+        )];
+        let msg = build_update_proof_message(&add_ops);
+        let proof = disentangle_crypto::signature::sign(&sk, &msg);
+        manager
+            .update_did(&did.0, add_ops, proof.to_bytes())
+            .unwrap();
+        assert_eq!(manager.get_did_document(&did.0).unwrap().service.len(), 1);
+
+        // Now remove it
+        let remove_ops = vec![DIDUpdateOp::RemoveService("svc-remove-me".to_string())];
+        let msg = build_update_proof_message(&remove_ops);
+        let proof = disentangle_crypto::signature::sign(&sk, &msg);
+        let result = manager.update_did(&did.0, remove_ops, proof.to_bytes());
+        assert!(result.is_ok());
+
+        let updated_doc = result.unwrap();
+        assert!(updated_doc.service.is_empty());
+    }
+
+    #[test]
+    fn test_update_did_change_agent_type() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // Verify initial agent type is Human
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert!(matches!(doc.agent_type, AgentType::Human));
+
+        // Update to AGI
+        let updates = vec![DIDUpdateOp::UpdateAgentType(AgentType::AGI {
+            runtime_attestation: None,
+        })];
+        let message = build_update_proof_message(&updates);
+        let proof = disentangle_crypto::signature::sign(&sk, &message);
+
+        let result = manager.update_did(&did.0, updates, proof.to_bytes());
+        assert!(result.is_ok());
+
+        let updated_doc = result.unwrap();
+        assert!(matches!(updated_doc.agent_type, AgentType::AGI { .. }));
+
+        // Verify persistence
+        let stored_doc = manager.get_did_document(&did.0).unwrap();
+        assert!(matches!(stored_doc.agent_type, AgentType::AGI { .. }));
+    }
+
+    #[test]
+    fn test_update_did_invalid_proof_rejected() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, _sk) = manager.register_did(AgentType::Human).unwrap();
+
+        let updates = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-bad".to_string(),
+                service_type: "BadService".to_string(),
+                endpoint: "https://evil.com".to_string(),
+            },
+        )];
+
+        // Attempt with garbage proof bytes (too short for valid signature)
+        let result = manager.update_did(&did.0, updates.clone(), b"deadbeef");
+        assert!(result.is_err());
+
+        // DID should be unchanged
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert!(doc.service.is_empty());
+    }
+
+    #[test]
+    fn test_update_did_wrong_key_rejected() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, _sk) = manager.register_did(AgentType::Human).unwrap();
+
+        let updates = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-wrong".to_string(),
+                service_type: "WrongService".to_string(),
+                endpoint: "https://wrong.com".to_string(),
+            },
+        )];
+
+        // Sign with a different key
+        let (wrong_sk, _) = disentangle_crypto::signature::generate_keypair();
+        let message = build_update_proof_message(&updates);
+        let bad_proof = disentangle_crypto::signature::sign(&wrong_sk, &message);
+
+        let result = manager.update_did(&did.0, updates, bad_proof.to_bytes());
+        assert!(result.is_err());
+
+        // DID should be unchanged
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert!(doc.service.is_empty());
+    }
+
+    #[test]
+    fn test_update_did_nonexistent_rejected() {
+        let mut manager = IdentityStateManager::new();
+
+        let updates = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-phantom".to_string(),
+                service_type: "PhantomService".to_string(),
+                endpoint: "https://phantom.com".to_string(),
+            },
+        )];
+
+        // Attempt update on a DID that was never registered
+        let result = manager.update_did("did:disentangle:nonexistent", updates, b"irrelevant");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_did_idempotent_add_service() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+
+        let endpoint = disentangle_identity::ServiceEndpoint {
+            id: "svc-idem".to_string(),
+            service_type: "IdempotentService".to_string(),
+            endpoint: "https://idem.com".to_string(),
+        };
+
+        // Add the same service twice in one update
+        let updates = vec![
+            DIDUpdateOp::AddService(endpoint.clone()),
+            DIDUpdateOp::AddService(endpoint),
+        ];
+        let message = build_update_proof_message(&updates);
+        let proof = disentangle_crypto::signature::sign(&sk, &message);
+
+        let result = manager.update_did(&did.0, updates, proof.to_bytes());
+        assert!(result.is_ok());
+
+        // Should only have one service (idempotent)
+        let doc = result.unwrap();
+        assert_eq!(doc.service.len(), 1);
+    }
+
+    #[test]
+    fn test_update_did_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // Drain the registration payload
+        manager.drain_payloads();
+
+        let updates = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-fed".to_string(),
+                service_type: "FederationService".to_string(),
+                endpoint: "https://fed.com".to_string(),
+            },
+        )];
+        let message = build_update_proof_message(&updates);
+        let proof = disentangle_crypto::signature::sign(&sk, &message);
+
+        manager
+            .update_did(&did.0, updates, proof.to_bytes())
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            &payloads[0].payload,
+            TransactionPayload::UpdateIdentity { did: d, .. } if d == &did.0
+        ));
     }
 }
