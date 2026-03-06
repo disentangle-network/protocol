@@ -9,8 +9,8 @@ use disentangle_crypto::signature::generate_keypair;
 use disentangle_crypto::types::Nullifier;
 use disentangle_dag::SCALE;
 use disentangle_identity::capability::{
-    AccessOp, Capability, CapabilitySubject, Constraint, ConstraintContext, DelegationRecord,
-    TransactionScope,
+    AccessOp, Capability, CapabilitySubject, CoherenceTier, Constraint, ConstraintContext,
+    DelegationRecord, TransactionScope,
 };
 use disentangle_identity::coherence::CoherenceProfile;
 use disentangle_identity::governance::{
@@ -307,6 +307,7 @@ fn capability_temporal_constraint_expiry() {
         topological_mass: 0,
         current_delegation_depth: 0,
         held_capabilities: vec![],
+        coherence_tier: CoherenceTier::Observer,
     };
     assert!(cap.check_constraints(&ctx_valid));
 
@@ -317,6 +318,7 @@ fn capability_temporal_constraint_expiry() {
         topological_mass: 0,
         current_delegation_depth: 0,
         held_capabilities: vec![],
+        coherence_tier: CoherenceTier::Observer,
     };
     assert!(!cap.check_constraints(&ctx_expired));
 
@@ -327,6 +329,7 @@ fn capability_temporal_constraint_expiry() {
         topological_mass: 0,
         current_delegation_depth: 0,
         held_capabilities: vec![],
+        coherence_tier: CoherenceTier::Observer,
     };
     assert!(!cap.check_constraints(&ctx_early));
 }
