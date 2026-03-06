@@ -43,7 +43,7 @@ pub use coherence::{
 };
 pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use did::{
-    AgentType, DIDDocument, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
+    AgentType, DIDDocument, DIDError, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,
 };
 pub use governance::{

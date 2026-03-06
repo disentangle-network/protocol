@@ -162,24 +162,37 @@ impl IdentityStateManager {
         self.did_registry.keys().cloned().collect()
     }
 
-    /// Deactivate a DID (requires proof of ownership)
-    pub fn deactivate_did(&mut self, did: &str, _proof: &[u8]) -> Result<(), IdentityError> {
-        if !self.did_registry.contains_key(did) {
-            return Err(IdentityError::DIDNotFound(did.to_string()));
-        }
+    /// Deactivate a DID (requires proof of ownership via signature verification).
+    ///
+    /// The `proof` must be a valid ML-DSA-87 signature over the domain-separated
+    /// deactivation payload `b"DID_DEACTIVATE_V1" || did_string`, signed by the
+    /// verifying key stored alongside the DID in the registry.
+    pub fn deactivate_did(&mut self, did: &str, proof: &[u8]) -> Result<(), IdentityError> {
+        let (_, pk) = self
+            .did_registry
+            .get(did)
+            .ok_or_else(|| IdentityError::DIDNotFound(did.to_string()))?;
+        let pk = pk.clone();
 
-        // TODO: Verify proof in Phase 2
-        // For Phase 1, we trust the proof parameter
+        // Build the expected deactivation payload (same domain separation as DIDDeactivation)
+        let mut message = Vec::new();
+        message.extend_from_slice(b"DID_DEACTIVATE_V1");
+        message.extend_from_slice(did.as_bytes());
+
+        // Parse the proof bytes into a Signature and verify against the stored key
+        let signature = disentangle_crypto::signature::Signature::from_bytes(proof)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+
+        disentangle_crypto::signature::verify(&pk, &message, &signature)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
 
         // Queue payload for federation broadcast BEFORE removing from registry
-        if let Some((_, pk)) = self.did_registry.get(did) {
-            self.pending_payloads.push(PendingPayload {
-                payload: TransactionPayload::DeactivateIdentity {
-                    did: did.to_string(),
-                },
-                signer_pk: pk.clone(),
-            });
-        }
+        self.pending_payloads.push(PendingPayload {
+            payload: TransactionPayload::DeactivateIdentity {
+                did: did.to_string(),
+            },
+            signer_pk: pk,
+        });
 
         self.did_registry.remove(did);
         Ok(())
@@ -3338,5 +3351,59 @@ mod tests {
         // Verify the DID was reconstructed
         assert!(mgr.get_did_document(&did_str).is_some());
         assert_eq!(mgr.list_dids().len(), 1);
+    }
+
+    // ── Deactivation proof verification tests ──
+
+    #[test]
+    fn test_deactivate_did_valid_proof() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, sk) = manager.register_did(AgentType::Human).unwrap();
+        assert_eq!(manager.list_dids().len(), 1);
+
+        // Build the deactivation proof (same domain separation as DIDDeactivation)
+        let mut message = Vec::new();
+        message.extend_from_slice(b"DID_DEACTIVATE_V1");
+        message.extend_from_slice(did.0.as_bytes());
+        let proof = disentangle_crypto::signature::sign(&sk, &message);
+
+        // Deactivate with valid proof
+        let result = manager.deactivate_did(&did.0, proof.to_bytes());
+        assert!(result.is_ok());
+        assert!(manager.get_did_document(&did.0).is_none());
+    }
+
+    #[test]
+    fn test_deactivate_did_invalid_proof_rejected() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, _sk) = manager.register_did(AgentType::Human).unwrap();
+        assert_eq!(manager.list_dids().len(), 1);
+
+        // Attempt deactivation with garbage bytes (too short for a valid signature)
+        let result = manager.deactivate_did(&did.0, b"deadbeef");
+        assert!(result.is_err());
+
+        // DID should still be registered
+        assert!(manager.get_did_document(&did.0).is_some());
+    }
+
+    #[test]
+    fn test_deactivate_did_wrong_key_rejected() {
+        let mut manager = IdentityStateManager::new();
+        let (did, _doc, _sk) = manager.register_did(AgentType::Human).unwrap();
+
+        // Sign with a different key (not the one that registered the DID)
+        let (wrong_sk, _) = disentangle_crypto::signature::generate_keypair();
+        let mut message = Vec::new();
+        message.extend_from_slice(b"DID_DEACTIVATE_V1");
+        message.extend_from_slice(did.0.as_bytes());
+        let bad_proof = disentangle_crypto::signature::sign(&wrong_sk, &message);
+
+        // Should fail verification
+        let result = manager.deactivate_did(&did.0, bad_proof.to_bytes());
+        assert!(result.is_err());
+
+        // DID should still be registered
+        assert!(manager.get_did_document(&did.0).is_some());
     }
 }
