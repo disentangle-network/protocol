@@ -208,20 +208,26 @@ fn bytes_to_field_u32(bytes: &[u8]) -> BabyBear {
     BabyBear::from_canonical_u32(val % (BABYBEAR_PRIME as u32))
 }
 
-/// Pad a trace to have a power-of-2 number of rows.
+/// Minimum trace height for FRI compatibility.
 ///
-/// STARK proving requires traces with 2^k rows. If the trace already
-/// has a power-of-2 height, it is returned unchanged. Otherwise, zero
-/// rows are appended until the height is the next power of two.
+/// FRI folding requires enough evaluation points for the query protocol
+/// to work. With `log_blowup: 2` and `num_queries: 28`, we need at least
+/// 2^3 = 8 rows to produce a valid proof.
+const MIN_TRACE_HEIGHT: usize = 8;
+
+/// Pad a trace to have a power-of-2 number of rows (minimum 8).
+///
+/// STARK proving requires traces with 2^k rows and FRI needs a minimum
+/// domain size. Zero rows are appended as needed.
 fn pad_trace_to_power_of_two(trace: RowMajorMatrix<BabyBear>) -> RowMajorMatrix<BabyBear> {
     let width = trace.width();
     let height = trace.height();
+    let target_height = height.next_power_of_two().max(MIN_TRACE_HEIGHT);
 
-    if height.is_power_of_two() {
+    if height == target_height {
         return trace;
     }
 
-    let target_height = height.next_power_of_two();
     let mut values = trace.values;
     values.resize(target_height * width, BabyBear::zero());
     RowMajorMatrix::new(values, width)

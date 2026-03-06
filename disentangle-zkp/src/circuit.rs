@@ -94,15 +94,25 @@ impl<AB: AirBuilder> Air<AB> for ReputationAir {
         );
 
         // Constraint 3: Hash chain continuity
-        // parent_hash becomes current_hash in next row
-        builder.when_transition().assert_eq(
-            local[5], // parent_hash_lo this row
-            next[0],  // current_hash_lo next row
-        );
-        builder.when_transition().assert_eq(
-            local[6], // parent_hash_hi this row
-            next[1],  // current_hash_hi next row
-        );
+        // parent_hash becomes current_hash in next row.
+        // Only enforced on non-last real rows (padding rows are all-zero
+        // and satisfy 0==0 trivially; the last-real→first-padding transition
+        // is skipped via the is_last guard).
+        let not_last = AB::Expr::one() - is_last;
+        builder
+            .when_transition()
+            .when(not_last.clone())
+            .assert_eq(
+                local[5], // parent_hash_lo this row
+                next[0],  // current_hash_lo next row
+            );
+        builder
+            .when_transition()
+            .when(not_last)
+            .assert_eq(
+                local[6], // parent_hash_hi this row
+                next[1],  // current_hash_hi next row
+            );
     }
 }
 
