@@ -169,6 +169,27 @@ impl IdentityGraph {
         None
     }
 
+    /// Count active and total grants for a DID.
+    ///
+    /// Returns `(active_grants, total_grants)` where:
+    /// - `total_grants` counts all delegation records where `record.delegator == did`
+    /// - `active_grants` counts those whose capability has not been revoked
+    pub fn capability_grant_stats(&self, did: &DID) -> (u64, u64) {
+        let mut active = 0u64;
+        let mut total = 0u64;
+        for (cap_id, records) in &self.delegations {
+            for record in records {
+                if record.delegator == *did {
+                    total += 1;
+                    if !self.revocations.contains(cap_id) {
+                        active += 1;
+                    }
+                }
+            }
+        }
+        (active, total)
+    }
+
     /// Get the delegation chain for a capability
     pub fn delegation_chain(&self, cap: &CapabilityId) -> Vec<&DelegationRecord> {
         self.delegations
