@@ -99,11 +99,7 @@ pub type ProofMap = HashMap<NodeId, ReputationClaim>;
 ///
 /// Uses bucketed reputation weights for consistency with ZK-verified computation.
 /// Each supporter's contribution is weighted by their reputation bucket.
-pub fn compute_topological_mass(
-    dag: &mut TransactionDAG,
-    root: &NodeId,
-    fork_block: u64,
-) -> MassResult {
+pub fn compute_topological_mass(dag: &mut TransactionDAG, root: &NodeId) -> MassResult {
     let descendants = dag.descendants(root);
     let mut supporter_claims: HashMap<Hash256, u64> = HashMap::new();
     let mut descendant_data: Vec<(NodeId, u64)> = Vec::new();
@@ -121,7 +117,7 @@ pub fn compute_topological_mass(
     let diversity_score = (unique_supporters as i32) * (SCALE + log_rep / 10);
     let mut total_mass: i64 = 0;
     for (node_id, reputation_claim) in descendant_data {
-        let path_weight = dag.find_best_path_weight(root, &node_id, 15, fork_block);
+        let path_weight = dag.find_best_path_weight(root, &node_id, 15);
         // Use bucket weight for reputation bonus (consistent with ZK proofs)
         let rep_bonus = bucket_weight(reputation_claim);
         let contribution = fp_mul(path_weight, rep_bonus);
@@ -147,7 +143,6 @@ pub fn compute_topological_mass(
 /// # Arguments
 /// * `dag` - The transaction DAG
 /// * `root` - Root node to compute mass from
-/// * `fork_block` - Block height for filtering (reserved for future use)
 /// * `ctx` - Verification context with expected Merkle root and epoch
 /// * `proofs` - Map of transaction IDs to their reputation proofs
 ///
@@ -157,7 +152,6 @@ pub fn compute_topological_mass(
 pub fn compute_topological_mass_verified(
     dag: &mut TransactionDAG,
     root: &NodeId,
-    fork_block: u64,
     ctx: &VerificationContext,
     proofs: &ProofMap,
 ) -> Result<MassResult, ConsensusError> {
@@ -209,7 +203,7 @@ pub fn compute_topological_mass_verified(
 
     let mut total_mass: i64 = 0;
     for (node_id, reputation_claim) in descendant_data {
-        let path_weight = dag.find_best_path_weight(root, &node_id, 15, fork_block);
+        let path_weight = dag.find_best_path_weight(root, &node_id, 15);
         // Use bucket weight for reputation bonus (consistent with ZK proofs)
         let rep_bonus = bucket_weight(reputation_claim);
         let contribution = fp_mul(path_weight, rep_bonus);
@@ -260,10 +254,9 @@ pub fn resolve_conflict(
     dag: &mut TransactionDAG,
     branch_a: &NodeId,
     branch_b: &NodeId,
-    fork_block: u64,
 ) -> (ConflictWinner, MassResult, MassResult) {
-    let mass_a = compute_topological_mass(dag, branch_a, fork_block);
-    let mass_b = compute_topological_mass(dag, branch_b, fork_block);
+    let mass_a = compute_topological_mass(dag, branch_a);
+    let mass_b = compute_topological_mass(dag, branch_b);
     let winner = if mass_a.total_mass > mass_b.total_mass {
         ConflictWinner::BranchA
     } else if mass_b.total_mass > mass_a.total_mass {
@@ -276,16 +269,11 @@ pub fn resolve_conflict(
     (winner, mass_a, mass_b)
 }
 
-pub fn is_finalized(
-    dag: &mut TransactionDAG,
-    branch: &NodeId,
-    competitors: &[NodeId],
-    fork_block: u64,
-) -> bool {
+pub fn is_finalized(dag: &mut TransactionDAG, branch: &NodeId, competitors: &[NodeId]) -> bool {
     const FINALITY_RATIO: i32 = 10;
-    let branch_mass = compute_topological_mass(dag, branch, fork_block);
+    let branch_mass = compute_topological_mass(dag, branch);
     for competitor in competitors {
-        let comp_mass = compute_topological_mass(dag, competitor, fork_block);
+        let comp_mass = compute_topological_mass(dag, competitor);
         if branch_mass.total_mass < fp_mul(FINALITY_RATIO * SCALE, comp_mass.total_mass) {
             return false;
         }
@@ -389,7 +377,7 @@ mod tests {
         let gid = genesis.id;
         dag.insert_genesis(genesis);
 
-        let result = compute_topological_mass(&mut dag, &gid, 0);
+        let result = compute_topological_mass(&mut dag, &gid);
         assert!(result.total_mass > 0);
         assert_eq!(result.supporters, 1);
         assert_eq!(result.claimed_reputation, 100);
@@ -421,7 +409,7 @@ mod tests {
         let proofs = ProofMap::new();
 
         // Without proofs, reputation is treated as 0 in non-strict mode
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs).unwrap();
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs).unwrap();
         assert_eq!(result.verified_claims, 0);
         assert_eq!(result.claimed_reputation, 0); // No verified reputation
     }
@@ -455,7 +443,7 @@ mod tests {
         let mut proofs = ProofMap::new();
         proofs.insert(gid, claim);
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs).unwrap();
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs).unwrap();
         assert_eq!(result.verified_claims, 1);
         assert_eq!(result.failed_verifications, 0);
         assert_eq!(result.claimed_reputation, 50); // Verified threshold is 50
@@ -481,7 +469,7 @@ mod tests {
         let mut proofs = ProofMap::new();
         proofs.insert(gid, claim);
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs).unwrap();
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs).unwrap();
         assert_eq!(result.verified_claims, 0);
         assert_eq!(result.failed_verifications, 1);
         assert_eq!(result.claimed_reputation, 0); // Failed verification = 0 reputation
@@ -505,7 +493,7 @@ mod tests {
         let mut proofs = ProofMap::new();
         proofs.insert(gid, claim);
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs).unwrap();
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs).unwrap();
         assert_eq!(result.verified_claims, 0);
         assert_eq!(result.failed_verifications, 1);
     }
@@ -520,7 +508,7 @@ mod tests {
         let ctx = VerificationContext::strict([0u8; 32], 1);
         let proofs = ProofMap::new(); // No proofs
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs);
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs);
         assert!(matches!(result, Err(ConsensusError::MissingProof { .. })));
     }
 
@@ -542,7 +530,7 @@ mod tests {
         let mut proofs = ProofMap::new();
         proofs.insert(gid, claim);
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs);
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs);
         assert!(matches!(
             result,
             Err(ConsensusError::VerificationFailed { .. })
@@ -605,7 +593,7 @@ mod tests {
         proofs.insert(gid, claim1);
         proofs.insert(cid, claim2);
 
-        let result = compute_topological_mass_verified(&mut dag, &gid, 0, &ctx, &proofs).unwrap();
+        let result = compute_topological_mass_verified(&mut dag, &gid, &ctx, &proofs).unwrap();
         assert_eq!(result.verified_claims, 2);
         assert_eq!(result.failed_verifications, 0);
         assert_eq!(result.supporters, 2);
@@ -634,7 +622,7 @@ mod tests {
         dag.insert_genesis(branch_b);
 
         // Both branches have same parent, block, reputation -> should have equal mass
-        let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, 1);
+        let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id);
 
         // Verify masses are equal (or very close due to fixed-point rounding)
         assert_eq!(
@@ -655,7 +643,7 @@ mod tests {
         );
 
         // Verify determinism: calling again should produce same result
-        let (winner2, _, _) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id, 1);
+        let (winner2, _, _) = resolve_conflict(&mut dag, &branch_a_id, &branch_b_id);
         assert_eq!(winner, winner2, "Conflict resolution must be deterministic");
     }
 
@@ -680,7 +668,7 @@ mod tests {
 
         // Initially, neither branch should be finalized (equal mass)
         assert!(
-            !is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
+            !is_finalized(&mut dag, &branch_a_id, &[branch_b_id]),
             "Branch A should not be finalized with equal mass"
         );
 
@@ -694,13 +682,13 @@ mod tests {
 
         // Now branch A should have much more mass and be finalized
         assert!(
-            is_finalized(&mut dag, &branch_a_id, &[branch_b_id], 1),
+            is_finalized(&mut dag, &branch_a_id, &[branch_b_id]),
             "Branch A should be finalized with 10+ descendants vs 1 competitor"
         );
 
         // Branch B should NOT be finalized
         assert!(
-            !is_finalized(&mut dag, &branch_b_id, &[branch_a_id], 1),
+            !is_finalized(&mut dag, &branch_b_id, &[branch_a_id]),
             "Branch B should not be finalized when competitor has much more mass"
         );
     }
@@ -831,7 +819,7 @@ mod tests {
         }
 
         // Compute mass - should not panic, final result should be clamped to i32::MAX
-        let result = compute_topological_mass(&mut dag, &gid, 0);
+        let result = compute_topological_mass(&mut dag, &gid);
 
         // Result should be positive
         assert!(result.total_mass > 0, "Mass should be positive");
@@ -844,55 +832,26 @@ mod tests {
     }
 
     #[test]
-    fn test_bootstrap_ramping_effect() {
-        // Test that conflicts during bootstrap period (blocks 1000-6000) have reduced curvature weighting
+    fn test_mass_at_different_depths() {
         let mut dag = TransactionDAG::new();
 
-        // Create genesis at block 0
         let genesis = make_test_tx(0, vec![], 100);
         let gid = genesis.id;
         dag.insert_genesis(genesis);
 
-        // Create transactions at different bootstrap phases
-        // Early bootstrap (block 1500) - should have reduced alpha
-        let tx_early = make_test_tx(1500, vec![gid], 100);
-        let early_id = tx_early.id;
-        dag.insert_genesis(tx_early);
+        let tx_a = make_test_tx(1, vec![gid], 100);
+        let aid = tx_a.id;
+        dag.insert_genesis(tx_a);
 
-        // Mid bootstrap (block 3500) - moderate alpha
-        let tx_mid = make_test_tx(3500, vec![gid], 100);
-        let mid_id = tx_mid.id;
-        dag.insert_genesis(tx_mid);
+        let tx_b = make_test_tx(2, vec![gid], 100);
+        let bid = tx_b.id;
+        dag.insert_genesis(tx_b);
 
-        // Post bootstrap (block 7000) - full alpha
-        let tx_post = make_test_tx(7000, vec![gid], 100);
-        let post_id = tx_post.id;
-        dag.insert_genesis(tx_post);
+        let mass_a = compute_topological_mass(&mut dag, &aid);
+        let mass_b = compute_topological_mass(&mut dag, &bid);
 
-        // The fork_block parameter affects how curvature is weighted via bootstrap ramping
-        // We can't directly observe alpha, but we can verify that mass computation
-        // doesn't panic and produces reasonable results at different bootstrap phases
-
-        let mass_early = compute_topological_mass(&mut dag, &early_id, 1500);
-        let mass_mid = compute_topological_mass(&mut dag, &mid_id, 3500);
-        let mass_post = compute_topological_mass(&mut dag, &post_id, 7000);
-
-        // All should produce valid mass values
-        assert!(
-            mass_early.total_mass > 0,
-            "Early bootstrap should produce valid mass"
-        );
-        assert!(
-            mass_mid.total_mass > 0,
-            "Mid bootstrap should produce valid mass"
-        );
-        assert!(
-            mass_post.total_mass > 0,
-            "Post bootstrap should produce valid mass"
-        );
-
-        // The actual ramping effect is tested indirectly through the integration test
-        // This test just verifies that the fork_block parameter is accepted and doesn't break anything
+        assert!(mass_a.total_mass > 0, "Should produce valid mass");
+        assert!(mass_b.total_mass > 0, "Should produce valid mass");
     }
 
     #[test]
@@ -921,7 +880,7 @@ mod tests {
             dag.insert_genesis(tx);
         }
 
-        let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &aid, &bid, 1);
+        let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &aid, &bid);
 
         // Branch B should have more mass due to descendants
         assert!(

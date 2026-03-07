@@ -83,7 +83,7 @@ fn mass_computation_accounts_for_depth_and_supporters() {
     let chain = build_linear_chain(&mut dag, gid, 10, 5, 100);
 
     // Mass at root should account for all descendants
-    let result = compute_topological_mass(&mut dag, &gid, 0);
+    let result = compute_topological_mass(&mut dag, &gid);
     assert!(
         result.total_mass > 0,
         "Mass should be positive with descendants"
@@ -96,7 +96,7 @@ fn mass_computation_accounts_for_depth_and_supporters() {
 
     // Mass at the tip (last in chain) should be lower -- it has no descendants
     let tip = *chain.last().unwrap();
-    let tip_result = compute_topological_mass(&mut dag, &tip, 0);
+    let tip_result = compute_topological_mass(&mut dag, &tip);
     assert!(
         result.total_mass > tip_result.total_mass,
         "Root mass ({}) should exceed tip mass ({}) because root has more descendants",
@@ -129,7 +129,7 @@ fn conflict_resolution_heavier_branch_wins() {
     dag.insert_genesis(branch_b);
     build_linear_chain(&mut dag, bid, 100, 8, 100);
 
-    let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &aid, &bid, 0);
+    let (winner, mass_a, mass_b) = resolve_conflict(&mut dag, &aid, &bid);
 
     assert!(
         mass_b.total_mass > mass_a.total_mass,
@@ -166,7 +166,7 @@ fn finalization_triggered_by_mass_dominance() {
 
     // Initially neither is finalized
     assert!(
-        !is_finalized(&mut dag, &aid, &[bid], 0),
+        !is_finalized(&mut dag, &aid, &[bid]),
         "Branch A should not be finalized with only one tx"
     );
 
@@ -180,13 +180,13 @@ fn finalization_triggered_by_mass_dominance() {
 
     // Branch A should now be finalized (10x+ mass advantage)
     assert!(
-        is_finalized(&mut dag, &aid, &[bid], 0),
+        is_finalized(&mut dag, &aid, &[bid]),
         "Branch A should be finalized with 20 high-reputation descendants"
     );
 
     // Branch B should NOT be finalized
     assert!(
-        !is_finalized(&mut dag, &bid, &[aid], 0),
+        !is_finalized(&mut dag, &bid, &[aid]),
         "Branch B should not be finalized against the dominant Branch A"
     );
 }
@@ -254,13 +254,13 @@ fn multi_hop_mass_deep_chain() {
     let chain = build_linear_chain(&mut dag, gid, 10, 10, 50);
 
     // Mass at genesis includes ALL 10 descendants
-    let root_mass = compute_topological_mass(&mut dag, &gid, 0);
+    let root_mass = compute_topological_mass(&mut dag, &gid);
 
     // Mass at depth 5 includes only 5 descendants
-    let mid_mass = compute_topological_mass(&mut dag, &chain[5], 0);
+    let mid_mass = compute_topological_mass(&mut dag, &chain[5]);
 
     // Mass at depth 9 includes only 1 descendant (the tip)
-    let near_tip_mass = compute_topological_mass(&mut dag, &chain[9], 0);
+    let near_tip_mass = compute_topological_mass(&mut dag, &chain[9]);
 
     assert!(
         root_mass.total_mass >= mid_mass.total_mass,
@@ -283,55 +283,30 @@ fn multi_hop_mass_deep_chain() {
 }
 
 // ===========================================================================
-// 6. Bootstrap ramping: mass computation at different fork_block values
+// 6. Mass computation on linear chain
 // ===========================================================================
 
 #[test]
-fn bootstrap_ramping_mass_varies_with_fork_block() {
-    // The fork_block parameter controls bootstrap throttling of curvature.
-    // At different bootstrap stages, the same DAG should produce different
-    // mass values because curvature weighting changes.
+fn mass_computation_linear_chain() {
+    let mut dag = TransactionDAG::new();
 
-    // Build a common DAG structure
-    fn build_dag_and_compute_mass(fork_block: u64) -> i32 {
-        let mut dag = TransactionDAG::new();
+    let genesis = make_tx(0, vec![], 100);
+    let gid = genesis.id;
+    dag.insert_genesis(genesis);
 
-        let genesis = make_tx(0, vec![], 100);
-        let gid = genesis.id;
-        dag.insert_genesis(genesis);
-
-        // Create a branch with several descendants
-        let mut current = gid;
-        for i in 1..=8 {
-            let tx = make_tx(i, vec![current], 100);
-            current = tx.id;
-            dag.insert_genesis(tx);
-        }
-
-        let result = compute_topological_mass(&mut dag, &gid, fork_block);
-        result.total_mass
+    let mut current = gid;
+    for i in 1..=8 {
+        let tx = make_tx(i, vec![current], 100);
+        current = tx.id;
+        dag.insert_genesis(tx);
     }
 
-    // Pre-bootstrap (no throttling): fork_block < 1000
-    let mass_early = build_dag_and_compute_mass(500);
-
-    // Mid-bootstrap (partial throttling): 1000 <= fork_block < 6000
-    let mass_mid = build_dag_and_compute_mass(3500);
-
-    // Post-bootstrap (full throttling): fork_block >= 6000
-    let mass_post = build_dag_and_compute_mass(7000);
-
-    // All should produce positive mass
-    assert!(mass_early > 0, "Early bootstrap mass should be positive");
-    assert!(mass_mid > 0, "Mid bootstrap mass should be positive");
-    assert!(mass_post > 0, "Post bootstrap mass should be positive");
-
-    // The early (no throttling) and post (full throttling) should differ
-    // because curvature weights change. In a linear chain the curvature is
-    // typically negative, so throttling (reducing the weight of negative
-    // curvature edges) should affect the result.
-    // Note: if all edges happen to have the same curvature profile, masses
-    // may coincide -- so we just verify they are all valid.
+    let result = compute_topological_mass(&mut dag, &gid);
+    assert!(result.total_mass > 0, "Mass should be positive");
+    assert!(
+        result.supporters > 1,
+        "Should count multiple supporters in chain"
+    );
 }
 
 // ===========================================================================
@@ -347,7 +322,7 @@ fn edge_case_single_node_dag() {
     dag.insert_genesis(genesis);
 
     // Mass of a lone genesis node: it is its own descendant
-    let result = compute_topological_mass(&mut dag, &gid, 0);
+    let result = compute_topological_mass(&mut dag, &gid);
 
     // Should have exactly 1 supporter (itself)
     assert_eq!(
@@ -382,8 +357,8 @@ fn edge_case_disconnected_nodes() {
     dag.insert_genesis(g2);
 
     // Mass of g1 should not include g2
-    let mass_g1 = compute_topological_mass(&mut dag, &g1id, 0);
-    let mass_g2 = compute_topological_mass(&mut dag, &g2id, 0);
+    let mass_g1 = compute_topological_mass(&mut dag, &g1id);
+    let mass_g2 = compute_topological_mass(&mut dag, &g2id);
 
     assert_eq!(
         mass_g1.supporters, 1,
@@ -396,12 +371,12 @@ fn edge_case_disconnected_nodes() {
 
     // Conflict resolution between disconnected nodes: the one with higher
     // reputation should win (they both have exactly 1 descendant: themselves)
-    let (winner, _, _) = resolve_conflict(&mut dag, &g1id, &g2id, 0);
+    let (winner, _, _) = resolve_conflict(&mut dag, &g1id, &g2id);
 
     // Both have 1 supporter. g2 has higher reputation (200 vs 100),
     // so it should have higher mass.
-    let mass_g1_val = compute_topological_mass(&mut dag, &g1id, 0).total_mass;
-    let mass_g2_val = compute_topological_mass(&mut dag, &g2id, 0).total_mass;
+    let mass_g1_val = compute_topological_mass(&mut dag, &g1id).total_mass;
+    let mass_g2_val = compute_topological_mass(&mut dag, &g2id).total_mass;
 
     if mass_g2_val > mass_g1_val {
         assert_eq!(winner, ConflictWinner::BranchB);
@@ -432,9 +407,9 @@ fn conflict_resolution_is_deterministic() {
     dag.insert_genesis(branch_b);
 
     // Resolve multiple times -- must always produce the same winner
-    let (w1, m1a, m1b) = resolve_conflict(&mut dag, &aid, &bid, 0);
-    let (w2, m2a, m2b) = resolve_conflict(&mut dag, &aid, &bid, 0);
-    let (w3, m3a, m3b) = resolve_conflict(&mut dag, &aid, &bid, 0);
+    let (w1, m1a, m1b) = resolve_conflict(&mut dag, &aid, &bid);
+    let (w2, m2a, m2b) = resolve_conflict(&mut dag, &aid, &bid);
+    let (w3, m3a, m3b) = resolve_conflict(&mut dag, &aid, &bid);
 
     assert_eq!(
         w1, w2,
