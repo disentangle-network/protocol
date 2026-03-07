@@ -463,11 +463,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(100);
 
     // Load or create identity state
+    let state_dir = env::var("DISENTANGLE_STATE_DIR").unwrap_or_else(|_| ".".to_string());
+    let state_path = std::path::Path::new(&state_dir).join("disentangle-state.json");
     let identity_manager = {
-        let state_path = std::path::Path::new("./disentangle-state.json");
         if state_path.exists() {
             info!("Loading identity state from {}", state_path.display());
-            match IdentityStateManager::load_from_file(state_path) {
+            match IdentityStateManager::load_from_file(&state_path) {
                 Ok(mgr) => {
                     info!("Identity state loaded successfully");
                     mgr
@@ -656,11 +657,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup Ctrl+C handler
     let identity_for_shutdown = shared_state.identity.clone();
+    let shutdown_state_path = state_path.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutting down. Saving state...");
         let mgr = identity_for_shutdown.lock().await;
-        if let Err(e) = mgr.save_to_file(std::path::Path::new("./disentangle-state.json")) {
+        if let Err(e) = mgr.save_to_file(&shutdown_state_path) {
             warn!("Failed to save state on shutdown: {}", e);
         } else {
             info!("State saved successfully");
@@ -673,7 +675,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = save_timer.tick() => {
                 let mgr = shared_state.identity.lock().await;
-                if let Err(e) = mgr.save_to_file(std::path::Path::new("./disentangle-state.json")) {
+                if let Err(e) = mgr.save_to_file(&state_path) {
                     warn!("Periodic save failed: {}", e);
                 } else {
                     debug!("State saved");

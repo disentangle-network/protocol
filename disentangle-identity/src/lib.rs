@@ -95,6 +95,9 @@ pub enum IdentityError {
 
     #[error("introduction cooldown active")]
     IntroductionCooldown,
+
+    #[error("persistence error: {0}")]
+    PersistenceError(String),
 }
 
 pub type Result<T> = std::result::Result<T, IdentityError>;

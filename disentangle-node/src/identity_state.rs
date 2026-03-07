@@ -2323,10 +2323,20 @@ impl IdentityStateManager {
         };
 
         let json = serde_json::to_string_pretty(&state)
-            .map_err(|e| IdentityError::InvalidDID(format!("Serialization error: {}", e)))?;
+            .map_err(|e| IdentityError::PersistenceError(format!("Serialization error: {}", e)))?;
 
-        std::fs::write(path, json)
-            .map_err(|e| IdentityError::InvalidDID(format!("File write error: {}", e)))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                IdentityError::PersistenceError(format!("Failed to create directories: {}", e))
+            })?;
+        }
+
+        let tmp_path = path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &json)
+            .map_err(|e| IdentityError::PersistenceError(format!("File write error: {}", e)))?;
+
+        std::fs::rename(&tmp_path, path)
+            .map_err(|e| IdentityError::PersistenceError(format!("File rename error: {}", e)))?;
 
         Ok(())
     }
@@ -2334,10 +2344,11 @@ impl IdentityStateManager {
     /// Load state from a JSON file
     pub fn load_from_file(path: &Path) -> Result<Self, IdentityError> {
         let json = std::fs::read_to_string(path)
-            .map_err(|e| IdentityError::DIDNotFound(format!("File read error: {}", e)))?;
+            .map_err(|e| IdentityError::PersistenceError(format!("File read error: {}", e)))?;
 
-        let state: SerializableState = serde_json::from_str(&json)
-            .map_err(|e| IdentityError::InvalidDID(format!("Deserialization error: {}", e)))?;
+        let state: SerializableState = serde_json::from_str(&json).map_err(|e| {
+            IdentityError::PersistenceError(format!("Deserialization error: {}", e))
+        })?;
 
         // Reconstruct did_registry
         let mut did_registry = HashMap::new();

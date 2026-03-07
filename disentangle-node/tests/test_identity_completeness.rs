@@ -1,8 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use disentangle_identity::{AgentType, ProposalType, VoteChoice};
+    use disentangle_identity::{
+        AgentType, CapabilitySubject, ProposalType, TransactionScope, VoteChoice,
+    };
     use disentangle_node::identity_state::IdentityStateManager;
     use std::path::Path;
+    use tempfile::TempDir;
 
     #[test]
     fn test_introduction_chain_pathfinding() {
@@ -117,5 +120,113 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let tmp = TempDir::new().unwrap();
+        let nested_path = tmp.path().join("deep").join("nested").join("state.json");
+
+        let mut mgr = IdentityStateManager::new();
+        let (_did, _, _sk) = mgr.register_did(AgentType::Human).unwrap();
+
+        // Should succeed even though deep/nested/ doesn't exist
+        mgr.save_to_file(&nested_path).unwrap();
+        assert!(nested_path.exists());
+
+        // Should load back
+        let loaded = IdentityStateManager::load_from_file(&nested_path).unwrap();
+        assert_eq!(loaded.list_dids().len(), 1);
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_persistence_error() {
+        let result = IdentityStateManager::load_from_file(Path::new(
+            "/tmp/nonexistent_disentangle_state_12345.json",
+        ));
+        assert!(result.is_err());
+        // Should be PersistenceError, not DIDNotFound
+        let err = match result {
+            Err(e) => format!("{}", e),
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("persistence error"));
+    }
+
+    #[test]
+    fn load_corrupt_file_returns_persistence_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("corrupt.json");
+        std::fs::write(&path, "this is not valid json {{{").unwrap();
+
+        let result = IdentityStateManager::load_from_file(&path);
+        assert!(result.is_err());
+        let err = match result {
+            Err(e) => format!("{}", e),
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("persistence error"));
+    }
+
+    #[test]
+    fn save_atomic_no_partial_files_on_success() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.json");
+
+        let mut mgr = IdentityStateManager::new();
+        mgr.register_did(AgentType::Human).unwrap();
+        mgr.save_to_file(&path).unwrap();
+
+        // After successful save, no .tmp file should remain
+        let tmp_path = tmp.path().join("state.json.tmp");
+        assert!(!tmp_path.exists());
+        // But the real file should exist
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn round_trip_preserves_full_state() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("full_state.json");
+
+        let mut mgr = IdentityStateManager::new();
+
+        // Create two DIDs
+        let (did_a, _, sk_a) = mgr.register_did(AgentType::Human).unwrap();
+        let (did_b, _, _sk_b) = mgr
+            .register_did(AgentType::AGI {
+                runtime_attestation: None,
+            })
+            .unwrap();
+
+        // Create an introduction
+        mgr.introduce(&did_a.0, &sk_a, &did_b.0, "colleague")
+            .unwrap();
+
+        // Grant a capability
+        let cap = mgr
+            .create_capability(
+                &did_a.0,
+                &sk_a,
+                CapabilitySubject::Transact {
+                    scope: TransactionScope::All,
+                },
+                vec![],
+                false,
+            )
+            .unwrap();
+
+        // Save
+        mgr.save_to_file(&path).unwrap();
+
+        // Load and verify
+        let loaded = IdentityStateManager::load_from_file(&path).unwrap();
+        assert_eq!(loaded.list_dids().len(), 2);
+        assert!(loaded.get_capability(&cap.id).is_some());
+
+        let chain = loaded
+            .get_introduction_chain(&did_a.0, &did_b.0)
+            .or_else(|| loaded.get_introduction_chain(&did_b.0, &did_a.0));
+        assert!(chain.is_some());
     }
 }
