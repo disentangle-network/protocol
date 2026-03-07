@@ -6,7 +6,7 @@ use crate::coherence::CoherenceProfile;
 use crate::did::DID;
 use crate::transactions::TransactionIdentity;
 use disentangle_crypto::{
-    hash::{sha3_256_multi, Hash256},
+    hash::{sha3_256, sha3_256_multi, Hash256},
     signature::{sign, verify, Signature, SigningKey, VerifyingKey},
 };
 use disentangle_dag::{FixedPoint, SCALE};
@@ -157,11 +157,14 @@ pub enum ProposalResult {
 /// Evaluate a governance proposal based on votes and coherence profiles
 ///
 /// This computes coherence-weighted vote tallies and checks quorum conditions.
-/// For Phase 1, we use simplified coherence profiles.
+/// Each voter's weight is their composite coherence score, looked up by matching
+/// the vote's ephemeral public key to the DID that was created from that key.
+/// In Phase 1, ephemeral_pk is the voter's real public key; in Phase 2, ZK proofs
+/// will replace this direct lookup.
 pub fn evaluate_proposal(
     proposal: &GovernanceProposal,
     votes: &[GovernanceVote],
-    _profiles: &HashMap<DID, CoherenceProfile>,
+    profiles: &HashMap<DID, CoherenceProfile>,
     current_depth: u64,
 ) -> ProposalResult {
     // Check if voting period has ended
@@ -181,12 +184,17 @@ pub fn evaluate_proposal(
     let mut total_weight: i64 = 0;
     let mut unique_supporters = 0u64;
 
-    // For Phase 1, we can't link voter_identity to DID without ZK proofs,
-    // so this is a placeholder implementation that would work with ZK in Phase 2
     for vote in &relevant_votes {
-        // In Phase 2, we would verify the ZK proof and get the DID's coherence profile
-        // For Phase 1, we use a default weight
-        let voter_weight = SCALE as i64; // Placeholder: equal weight
+        // Look up the voter's coherence weight by matching their ephemeral_pk to a DID.
+        // DID = did:disentangle:[agi:]<hex(sha3_256(pk_bytes))>, so we hash the
+        // ephemeral_pk and compare against each DID's method-specific ID.
+        // In Phase 2, ZK proofs will replace this direct key-to-DID mapping.
+        let pk_hash_hex = hex::encode(sha3_256(&vote.voter_identity.ephemeral_pk.to_bytes()));
+        let voter_weight = profiles
+            .iter()
+            .find(|(did, _)| did.method_specific_id() == pk_hash_hex)
+            .map(|(_, profile)| profile.composite_score(current_depth) as i64)
+            .unwrap_or(SCALE as i64); // Fallback to default weight if DID not found
 
         match vote.vote {
             VoteChoice::For => {
@@ -405,5 +413,218 @@ mod tests {
 
         let result = evaluate_proposal(&proposal, &votes, &profiles, 2001);
         assert_eq!(result, ProposalResult::Failed);
+    }
+
+    #[test]
+    fn test_coherence_weighted_voting_high_coherence_wins() {
+        let (sk, pk) = generate_keypair();
+        let did = DID::new(&pk, false);
+
+        // 50% threshold
+        let proposal = GovernanceProposal::new(
+            &did,
+            ProposalType::ProtocolParameter {
+                parameter: "test".to_string(),
+                new_value: vec![],
+            },
+            [1u8; 32],
+            1000,
+            2000,
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
+            &sk,
+        );
+
+        // High-coherence voter votes For
+        let (_, high_pk) = generate_keypair();
+        let high_did = DID::new(&high_pk, false);
+        let high_profile = CoherenceProfile {
+            did: high_did.clone(),
+            topological_mass: SCALE * 10,
+            mean_local_curvature: SCALE / 2,
+            relational_diversity: 50,
+            temporal_depth: 5000,
+            capability_coherence: SCALE,
+            introduction_coherence: SCALE,
+            last_active_depth: 2000,
+        };
+
+        // Low-coherence voter votes Against
+        let (_, low_pk) = generate_keypair();
+        let low_did = DID::new(&low_pk, false);
+        let low_profile = CoherenceProfile {
+            did: low_did.clone(),
+            topological_mass: SCALE / 10,
+            mean_local_curvature: 0,
+            relational_diversity: 1,
+            temporal_depth: 100,
+            capability_coherence: 0,
+            introduction_coherence: 0,
+            last_active_depth: 2000,
+        };
+
+        let high_vote = GovernanceVote {
+            proposal_id: proposal.id,
+            voter_identity: TransactionIdentity {
+                ephemeral_pk: high_pk,
+                did_binding_proof: vec![],
+                nullifier: Nullifier([3u8; 32]),
+                reputation_bucket: 5,
+            },
+            vote: VoteChoice::For,
+            parents: vec![],
+            depth: 1500,
+        };
+
+        let low_vote = GovernanceVote {
+            proposal_id: proposal.id,
+            voter_identity: TransactionIdentity {
+                ephemeral_pk: low_pk,
+                did_binding_proof: vec![],
+                nullifier: Nullifier([4u8; 32]),
+                reputation_bucket: 1,
+            },
+            vote: VoteChoice::Against,
+            parents: vec![],
+            depth: 1500,
+        };
+
+        let votes = vec![high_vote, low_vote];
+        let mut profiles = HashMap::new();
+        profiles.insert(high_did, high_profile);
+        profiles.insert(low_did, low_profile);
+
+        // High-coherence voter's For should outweigh low-coherence Against
+        let result = evaluate_proposal(&proposal, &votes, &profiles, 2001);
+        assert_eq!(result, ProposalResult::Passed);
+    }
+
+    #[test]
+    fn test_coherence_weighted_voting_low_coherence_loses() {
+        let (sk, pk) = generate_keypair();
+        let did = DID::new(&pk, false);
+
+        // 50% threshold
+        let proposal = GovernanceProposal::new(
+            &did,
+            ProposalType::ProtocolParameter {
+                parameter: "test".to_string(),
+                new_value: vec![],
+            },
+            [1u8; 32],
+            1000,
+            2000,
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
+            &sk,
+        );
+
+        // Low-coherence voter votes For
+        let (_, low_pk) = generate_keypair();
+        let low_did = DID::new(&low_pk, false);
+        let low_profile = CoherenceProfile {
+            did: low_did.clone(),
+            topological_mass: SCALE / 10,
+            mean_local_curvature: 0,
+            relational_diversity: 1,
+            temporal_depth: 100,
+            capability_coherence: 0,
+            introduction_coherence: 0,
+            last_active_depth: 2000,
+        };
+
+        // High-coherence voter votes Against
+        let (_, high_pk) = generate_keypair();
+        let high_did = DID::new(&high_pk, false);
+        let high_profile = CoherenceProfile {
+            did: high_did.clone(),
+            topological_mass: SCALE * 10,
+            mean_local_curvature: SCALE / 2,
+            relational_diversity: 50,
+            temporal_depth: 5000,
+            capability_coherence: SCALE,
+            introduction_coherence: SCALE,
+            last_active_depth: 2000,
+        };
+
+        let low_vote = GovernanceVote {
+            proposal_id: proposal.id,
+            voter_identity: TransactionIdentity {
+                ephemeral_pk: low_pk,
+                did_binding_proof: vec![],
+                nullifier: Nullifier([3u8; 32]),
+                reputation_bucket: 1,
+            },
+            vote: VoteChoice::For,
+            parents: vec![],
+            depth: 1500,
+        };
+
+        let high_vote = GovernanceVote {
+            proposal_id: proposal.id,
+            voter_identity: TransactionIdentity {
+                ephemeral_pk: high_pk,
+                did_binding_proof: vec![],
+                nullifier: Nullifier([4u8; 32]),
+                reputation_bucket: 5,
+            },
+            vote: VoteChoice::Against,
+            parents: vec![],
+            depth: 1500,
+        };
+
+        let votes = vec![low_vote, high_vote];
+        let mut profiles = HashMap::new();
+        profiles.insert(low_did, low_profile);
+        profiles.insert(high_did, high_profile);
+
+        // Low-coherence For is outweighed by high-coherence Against -> fails
+        let result = evaluate_proposal(&proposal, &votes, &profiles, 2001);
+        assert_eq!(result, ProposalResult::Failed);
+    }
+
+    #[test]
+    fn test_coherence_weighted_fallback_for_unknown_voter() {
+        let (sk, pk) = generate_keypair();
+        let did = DID::new(&pk, false);
+
+        let proposal = GovernanceProposal::new(
+            &did,
+            ProposalType::ProtocolParameter {
+                parameter: "test".to_string(),
+                new_value: vec![],
+            },
+            [1u8; 32],
+            1000,
+            2000,
+            GovernanceQuorum::CoherenceWeighted {
+                threshold: SCALE / 2,
+            },
+            &sk,
+        );
+
+        // Voter not in profiles -- should fallback to SCALE weight
+        let (_, voter_pk) = generate_keypair();
+        let vote = GovernanceVote {
+            proposal_id: proposal.id,
+            voter_identity: TransactionIdentity {
+                ephemeral_pk: voter_pk,
+                did_binding_proof: vec![],
+                nullifier: Nullifier([5u8; 32]),
+                reputation_bucket: 0,
+            },
+            vote: VoteChoice::For,
+            parents: vec![],
+            depth: 1500,
+        };
+
+        let votes = vec![vote];
+        let profiles = HashMap::new(); // No profiles -- fallback to SCALE
+
+        // 100% For with default weight -> passes
+        let result = evaluate_proposal(&proposal, &votes, &profiles, 2001);
+        assert_eq!(result, ProposalResult::Passed);
     }
 }
