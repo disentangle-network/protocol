@@ -184,14 +184,14 @@ impl Default for ReputationVerifier {
 ///
 /// Public values encode:
 /// - `[0]`: threshold (reduced mod BabyBear prime)
-/// - `[1]`: merkle_root low 4 bytes as u32 (reduced mod BabyBear prime)
-/// - `[2]`: merkle_root bytes 4..8 as u32 (reduced mod BabyBear prime)
+/// - `[1..=8]`: all 32 bytes of merkle_root as 8 × 4-byte little-endian u32
+///   chunks (each reduced mod BabyBear prime)
 fn build_public_values(threshold: u64, merkle_root: &Hash256) -> Vec<BabyBear> {
-    vec![
-        u64_to_field(threshold),
-        bytes_to_field_u32(&merkle_root[0..4]),
-        bytes_to_field_u32(&merkle_root[4..8]),
-    ]
+    let mut values = vec![u64_to_field(threshold)];
+    for chunk in merkle_root.chunks(4) {
+        values.push(bytes_to_field_u32(chunk));
+    }
+    values
 }
 
 /// Convert u64 to BabyBear field element (reduced mod prime).
@@ -310,5 +310,23 @@ mod tests {
 
         let root = prover.merkle_root();
         assert!(verifier.verify(&claim, &root, 1).is_ok());
+    }
+
+    #[test]
+    fn test_verify_rejects_partial_root_match() {
+        let accounts = make_test_accounts();
+        let prover = ReputationProver::new(&accounts);
+        let verifier = ReputationVerifier::new();
+
+        let claim = prover.prove(0, &accounts[0], 50, 1).unwrap();
+        let real_root = prover.merkle_root();
+
+        // Create a fake root that matches the first 8 bytes but differs after
+        let mut fake_root = real_root;
+        fake_root[8] ^= 0xFF;
+        fake_root[16] ^= 0xFF;
+
+        // Verification with fake root must fail
+        assert!(verifier.verify(&claim, &fake_root, 1).is_err());
     }
 }
