@@ -102,6 +102,13 @@ pub enum TransactionPayload {
     DeactivateIdentity { did: String },
     /// Update a DID document. updates is bincode-serialized Vec<DIDUpdateOp>.
     UpdateIdentity { did: String, updates: Vec<u8> },
+    /// Rotate the signing key for a DID. new_verification_method is bincode-serialized VerificationMethod.
+    RotateKey {
+        did: String,
+        old_key_id: String,
+        new_verification_method: Vec<u8>,
+        new_verifying_key: Vec<u8>,
+    },
 
     // -- Social graph --
     /// Create an introduction between two DIDs.

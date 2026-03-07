@@ -14,7 +14,8 @@ use disentangle_identity::{
     IdentityError, IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus,
     IntroductionContext, IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal,
     ProposalResult, ProposalStatus, ProposalType, RegionSelector, RevocationScope,
-    ServiceAgreement, SettlementAgreement, SharedIntent, VoteChoice, DID, MAX_HISTORY_DEPTH,
+    ServiceAgreement, SettlementAgreement, SharedIntent, VerificationMethod, VoteChoice, DID,
+    MAX_HISTORY_DEPTH,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -279,6 +280,95 @@ impl IdentityStateManager {
                     updates: updates_bytes,
                 },
                 signer_pk: pk,
+            });
+        }
+
+        Ok(updated_doc)
+    }
+
+    /// Rotate the signing key for a DID (requires dual proof of ownership).
+    ///
+    /// Key rotation is a privileged operation that replaces the active verification
+    /// method and updates the registry's VerifyingKey. Both the old and new keys
+    /// must sign the rotation payload to prove:
+    /// 1. The current owner authorizes the rotation (old key signature)
+    /// 2. The new key holder proves possession (new key signature)
+    ///
+    /// The DID string itself does NOT change -- it encodes the hash of the
+    /// original (genesis) key, not the current key.
+    ///
+    /// Domain separation: `b"KEY_ROTATION_V1" || did || old_key_id || bincode(new_method)`
+    pub fn rotate_key(
+        &mut self,
+        did: &str,
+        old_key_id: &str,
+        new_method: VerificationMethod,
+        proof_old: &[u8],
+        proof_new: &[u8],
+    ) -> Result<DIDDocument, IdentityError> {
+        // Look up the current verifying key
+        let (_, current_pk) = self
+            .did_registry
+            .get(did)
+            .ok_or_else(|| IdentityError::DIDNotFound(did.to_string()))?;
+        let current_pk = current_pk.clone();
+
+        // Parse the new verifying key from the new verification method
+        let new_pk = VerifyingKey::from_bytes(&new_method.public_key_bytes).map_err(|_| {
+            IdentityError::InvalidDID("Invalid new verifying key bytes".to_string())
+        })?;
+
+        // Build the rotation payload (matches KeyRotation::signing_payload)
+        let mut message = Vec::new();
+        message.extend_from_slice(b"KEY_ROTATION_V1");
+        message.extend_from_slice(did.as_bytes());
+        message.extend_from_slice(old_key_id.as_bytes());
+        if let Ok(bytes) = bincode::serialize(&new_method) {
+            message.extend_from_slice(&bytes);
+        }
+
+        // Verify old key signature (authorization)
+        let sig_old = disentangle_crypto::signature::Signature::from_bytes(proof_old)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+        disentangle_crypto::signature::verify(&current_pk, &message, &sig_old)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+
+        // Verify new key signature (proof of possession)
+        let sig_new = disentangle_crypto::signature::Signature::from_bytes(proof_new)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+        disentangle_crypto::signature::verify(&new_pk, &message, &sig_new)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+
+        // Apply the rotation: replace the old verification method with the new one
+        let (doc, stored_pk) = self
+            .did_registry
+            .get_mut(did)
+            .ok_or_else(|| IdentityError::DIDNotFound(did.to_string()))?;
+
+        // Remove the old verification method by ID
+        doc.verification_methods.retain(|m| m.id != old_key_id);
+
+        // Add the new verification method
+        doc.verification_methods.push(new_method.clone());
+
+        // Update the registry's verifying key to the new one
+        *stored_pk = new_pk.clone();
+
+        // Update the document's timestamp
+        doc.updated_depth = self.current_depth;
+
+        let updated_doc = doc.clone();
+
+        // Queue payload for federation broadcast
+        if let Ok(method_bytes) = bincode::serialize(&new_method) {
+            self.pending_payloads.push(PendingPayload {
+                payload: TransactionPayload::RotateKey {
+                    did: did.to_string(),
+                    old_key_id: old_key_id.to_string(),
+                    new_verification_method: method_bytes,
+                    new_verifying_key: new_pk.to_bytes(),
+                },
+                signer_pk: new_pk,
             });
         }
 
@@ -1784,6 +1874,41 @@ impl IdentityStateManager {
                     }
                 }
                 doc.updated_depth = depth;
+                Ok(())
+            }
+
+            TransactionPayload::RotateKey {
+                did,
+                old_key_id,
+                new_verification_method,
+                new_verifying_key,
+            } => {
+                // Skip if DID not found (may not have propagated yet)
+                let entry = match self.did_registry.get_mut(did) {
+                    Some(e) => e,
+                    None => return Ok(()),
+                };
+
+                let new_method: VerificationMethod = bincode::deserialize(new_verification_method)
+                    .map_err(|e| {
+                        IdentityError::InvalidDID(format!(
+                            "Failed to deserialize VerificationMethod: {}",
+                            e
+                        ))
+                    })?;
+
+                let new_pk = VerifyingKey::from_bytes(new_verifying_key).map_err(|_| {
+                    IdentityError::InvalidDID("Invalid new verifying key bytes".to_string())
+                })?;
+
+                // Remove old verification method and add new one
+                entry.0.verification_methods.retain(|m| m.id != *old_key_id);
+                entry.0.verification_methods.push(new_method);
+
+                // Update the stored verifying key
+                entry.1 = new_pk;
+
+                entry.0.updated_depth = depth;
                 Ok(())
             }
 
@@ -3773,5 +3898,337 @@ mod tests {
             &payloads[0].payload,
             TransactionPayload::UpdateIdentity { did: d, .. } if d == &did.0
         ));
+    }
+
+    // ── Key rotation tests ──
+
+    /// Helper to build the key rotation proof message (same domain separation as KeyRotation)
+    fn build_rotation_proof_message(
+        did: &str,
+        old_key_id: &str,
+        new_method: &disentangle_identity::VerificationMethod,
+    ) -> Vec<u8> {
+        let mut message = Vec::new();
+        message.extend_from_slice(b"KEY_ROTATION_V1");
+        message.extend_from_slice(did.as_bytes());
+        message.extend_from_slice(old_key_id.as_bytes());
+        if let Ok(bytes) = bincode::serialize(new_method) {
+            message.extend_from_slice(&bytes);
+        }
+        message
+    }
+
+    #[test]
+    fn test_rotate_key_success_and_old_key_invalid() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, sk_old) = manager.register_did(AgentType::Human).unwrap();
+        let old_key_id = doc.verification_methods[0].id.clone();
+
+        // Generate a new keypair for rotation
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: format!("{}#key-2", did.0),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: did.clone(),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        // Build and sign the rotation payload
+        let message = build_rotation_proof_message(&did.0, &old_key_id, &new_method);
+        let proof_old = disentangle_crypto::signature::sign(&sk_old, &message);
+        let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        let result = manager.rotate_key(
+            &did.0,
+            &old_key_id,
+            new_method,
+            proof_old.to_bytes(),
+            proof_new.to_bytes(),
+        );
+        assert!(result.is_ok());
+
+        // Verify the DID string did NOT change
+        assert!(manager.get_did_document(&did.0).is_some());
+
+        // Verify the old key ID is gone, new key ID is present
+        let updated_doc = manager.get_did_document(&did.0).unwrap();
+        assert!(!updated_doc
+            .verification_methods
+            .iter()
+            .any(|m| m.id == old_key_id));
+        assert!(updated_doc
+            .verification_methods
+            .iter()
+            .any(|m| m.id == format!("{}#key-2", did.0)));
+
+        // Verify the old key can no longer authorize a deactivation
+        let mut deactivate_msg = Vec::new();
+        deactivate_msg.extend_from_slice(b"DID_DEACTIVATE_V1");
+        deactivate_msg.extend_from_slice(did.0.as_bytes());
+        let bad_proof = disentangle_crypto::signature::sign(&sk_old, &deactivate_msg);
+        let deactivate_result = manager.deactivate_did(&did.0, bad_proof.to_bytes());
+        assert!(deactivate_result.is_err());
+    }
+
+    #[test]
+    fn test_rotate_key_new_key_works_for_operations() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, sk_old) = manager.register_did(AgentType::Human).unwrap();
+        let old_key_id = doc.verification_methods[0].id.clone();
+
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: format!("{}#key-2", did.0),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: did.clone(),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        let message = build_rotation_proof_message(&did.0, &old_key_id, &new_method);
+        let proof_old = disentangle_crypto::signature::sign(&sk_old, &message);
+        let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        manager
+            .rotate_key(
+                &did.0,
+                &old_key_id,
+                new_method,
+                proof_old.to_bytes(),
+                proof_new.to_bytes(),
+            )
+            .unwrap();
+
+        // Now use the NEW key to perform a DID update (add a service endpoint)
+        let updates = vec![DIDUpdateOp::AddService(
+            disentangle_identity::ServiceEndpoint {
+                id: "svc-after-rotation".to_string(),
+                service_type: "TestService".to_string(),
+                endpoint: "https://example.com".to_string(),
+            },
+        )];
+        let update_msg = build_update_proof_message(&updates);
+        let update_proof = disentangle_crypto::signature::sign(&sk_new, &update_msg);
+
+        let result = manager.update_did(&did.0, updates, update_proof.to_bytes());
+        assert!(result.is_ok());
+
+        // Verify the service was actually added
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert!(doc.service.iter().any(|s| s.id == "svc-after-rotation"));
+    }
+
+    #[test]
+    fn test_rotate_key_multiple_times() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, sk_old) = manager.register_did(AgentType::Human).unwrap();
+        let mut current_key_id = doc.verification_methods[0].id.clone();
+        let mut current_sk = sk_old;
+
+        // Rotate three times in sequence
+        for i in 2..=4 {
+            let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+            let new_method = disentangle_identity::VerificationMethod {
+                id: format!("{}#key-{}", did.0, i),
+                method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+                controller: did.clone(),
+                public_key_bytes: pk_new.to_bytes(),
+            };
+
+            let message = build_rotation_proof_message(&did.0, &current_key_id, &new_method);
+            let proof_old = disentangle_crypto::signature::sign(&current_sk, &message);
+            let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+            let result = manager.rotate_key(
+                &did.0,
+                &current_key_id,
+                new_method,
+                proof_old.to_bytes(),
+                proof_new.to_bytes(),
+            );
+            assert!(result.is_ok(), "Rotation {} failed", i);
+
+            current_key_id = format!("{}#key-{}", did.0, i);
+            current_sk = sk_new;
+        }
+
+        // Verify the final state has only the latest key
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert_eq!(doc.verification_methods.len(), 1);
+        assert_eq!(doc.verification_methods[0].id, format!("{}#key-4", did.0));
+
+        // Verify the current (latest) key can still authorize operations
+        let mut deactivate_msg = Vec::new();
+        deactivate_msg.extend_from_slice(b"DID_DEACTIVATE_V1");
+        deactivate_msg.extend_from_slice(did.0.as_bytes());
+        let proof = disentangle_crypto::signature::sign(&current_sk, &deactivate_msg);
+        let result = manager.deactivate_did(&did.0, proof.to_bytes());
+        assert!(result.is_ok());
+        assert!(manager.get_did_document(&did.0).is_none());
+    }
+
+    #[test]
+    fn test_rotate_key_wrong_old_key_rejected() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, _sk_old) = manager.register_did(AgentType::Human).unwrap();
+        let old_key_id = doc.verification_methods[0].id.clone();
+
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+        let (sk_wrong, _) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: format!("{}#key-2", did.0),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: did.clone(),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        let message = build_rotation_proof_message(&did.0, &old_key_id, &new_method);
+        // Sign with wrong key instead of the current key
+        let proof_wrong = disentangle_crypto::signature::sign(&sk_wrong, &message);
+        let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        let result = manager.rotate_key(
+            &did.0,
+            &old_key_id,
+            new_method,
+            proof_wrong.to_bytes(),
+            proof_new.to_bytes(),
+        );
+        assert!(result.is_err());
+
+        // DID should still have the original key
+        let doc = manager.get_did_document(&did.0).unwrap();
+        assert_eq!(doc.verification_methods[0].id, old_key_id);
+    }
+
+    #[test]
+    fn test_rotate_key_nonexistent_did_rejected() {
+        let mut manager = IdentityStateManager::new();
+
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: "did:disentangle:fake#key-2".to_string(),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: disentangle_identity::DID("did:disentangle:fake".to_string()),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        let message = build_rotation_proof_message(
+            "did:disentangle:fake",
+            "did:disentangle:fake#key-1",
+            &new_method,
+        );
+        let proof = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        let result = manager.rotate_key(
+            "did:disentangle:fake",
+            "did:disentangle:fake#key-1",
+            new_method,
+            proof.to_bytes(),
+            proof.to_bytes(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rotate_key_queues_payload() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, sk_old) = manager.register_did(AgentType::Human).unwrap();
+        manager.drain_payloads(); // Clear registration payload
+        let old_key_id = doc.verification_methods[0].id.clone();
+
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: format!("{}#key-2", did.0),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: did.clone(),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        let message = build_rotation_proof_message(&did.0, &old_key_id, &new_method);
+        let proof_old = disentangle_crypto::signature::sign(&sk_old, &message);
+        let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        manager
+            .rotate_key(
+                &did.0,
+                &old_key_id,
+                new_method,
+                proof_old.to_bytes(),
+                proof_new.to_bytes(),
+            )
+            .unwrap();
+
+        let payloads = manager.drain_payloads();
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(
+            &payloads[0].payload,
+            TransactionPayload::RotateKey { did: d, .. } if d == &did.0
+        ));
+    }
+
+    #[test]
+    fn test_rotate_key_survives_save_load_roundtrip() {
+        let mut manager = IdentityStateManager::new();
+        let (did, doc, sk_old) = manager.register_did(AgentType::Human).unwrap();
+        let old_key_id = doc.verification_methods[0].id.clone();
+
+        let (sk_new, pk_new) = disentangle_crypto::signature::generate_keypair();
+
+        let new_method = disentangle_identity::VerificationMethod {
+            id: format!("{}#key-2", did.0),
+            method_type: disentangle_identity::VerificationMethodType::Dilithium5Key2026,
+            controller: did.clone(),
+            public_key_bytes: pk_new.to_bytes(),
+        };
+
+        let message = build_rotation_proof_message(&did.0, &old_key_id, &new_method);
+        let proof_old = disentangle_crypto::signature::sign(&sk_old, &message);
+        let proof_new = disentangle_crypto::signature::sign(&sk_new, &message);
+
+        manager
+            .rotate_key(
+                &did.0,
+                &old_key_id,
+                new_method,
+                proof_old.to_bytes(),
+                proof_new.to_bytes(),
+            )
+            .unwrap();
+
+        // Save and reload
+        let tmp = std::env::temp_dir().join("test_rotate_key_roundtrip.json");
+        manager.save_to_file(&tmp).unwrap();
+        let mut loaded_mgr = IdentityStateManager::load_from_file(&tmp).unwrap();
+        std::fs::remove_file(&tmp).ok();
+
+        // After reload, the new key should be in effect
+        let loaded_doc = loaded_mgr.get_did_document(&did.0).unwrap();
+        assert_eq!(loaded_doc.verification_methods.len(), 1);
+        assert_eq!(
+            loaded_doc.verification_methods[0].id,
+            format!("{}#key-2", did.0)
+        );
+
+        // Verify the stored verifying key is the NEW key (not the old one):
+        // the old key should fail deactivation, the new key should succeed
+        let mut deactivate_msg = Vec::new();
+        deactivate_msg.extend_from_slice(b"DID_DEACTIVATE_V1");
+        deactivate_msg.extend_from_slice(did.0.as_bytes());
+
+        // Old key should fail
+        let bad_proof = disentangle_crypto::signature::sign(&sk_old, &deactivate_msg);
+        let result_bad = loaded_mgr.deactivate_did(&did.0, bad_proof.to_bytes());
+        assert!(result_bad.is_err());
+
+        // New key should succeed
+        let good_proof = disentangle_crypto::signature::sign(&sk_new, &deactivate_msg);
+        let result_good = loaded_mgr.deactivate_did(&did.0, good_proof.to_bytes());
+        assert!(result_good.is_ok());
     }
 }
