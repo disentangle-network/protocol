@@ -14,7 +14,8 @@ use axum::{
 use disentangle_crypto::signature::SigningKey;
 use disentangle_identity::{
     AgentType, CapabilitySubject, Constraint, DIDUpdateOp, OracleQuery, ProposalType,
-    RegionSelector, RevocationScope, ServiceEndpoint, VoteChoice,
+    RegionSelector, RevocationScope, ServiceEndpoint, VerificationMethod, VerificationMethodType,
+    VoteChoice,
 };
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -309,6 +310,139 @@ pub async fn identity_update_handler(
     })?;
 
     Ok(Json(UpdateIdentityResponse { document: doc_json }))
+}
+
+// Key rotation endpoint
+
+#[derive(Deserialize)]
+pub struct RotateKeyRequest {
+    /// Hex-encoded bytes of the new verifying (public) key
+    pub new_verifying_key_hex: String,
+    /// Hex-encoded signature from the CURRENT (old) key over the rotation payload
+    pub proof_old_hex: String,
+    /// Hex-encoded signature from the NEW key over the rotation payload
+    pub proof_new_hex: String,
+}
+
+#[derive(Serialize)]
+pub struct RotateKeyResponse {
+    pub document: serde_json::Value,
+}
+
+pub async fn identity_rotate_key_handler(
+    State(state): State<IdentityState>,
+    Path(did): Path<String>,
+    Json(req): Json<RotateKeyRequest>,
+) -> Result<Json<RotateKeyResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut mgr = state.lock().await;
+
+    let new_pk_bytes = hex::decode(&req.new_verifying_key_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid new_verifying_key_hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let proof_old = hex::decode(&req.proof_old_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid proof_old_hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    let proof_new = hex::decode(&req.proof_new_hex).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid proof_new_hex encoding".to_string(),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    // Determine the old key ID (the current primary verification method)
+    let old_key_id = {
+        let doc = mgr.get_did_document(&did).ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("DID not found: {}", did),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+        doc.verification_methods
+            .first()
+            .map(|m| m.id.clone())
+            .ok_or_else(|| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "DID has no verification methods".to_string(),
+                        coherence_score: None,
+                    }),
+                )
+            })?
+    };
+
+    // Build the new verification method with an incremented key number
+    let key_number = {
+        let doc = mgr.get_did_document(&did).unwrap();
+        // Parse the current highest key number and increment
+        doc.verification_methods
+            .iter()
+            .filter_map(|m| {
+                m.id.rsplit_once("#key-")
+                    .and_then(|(_, n)| n.parse::<u32>().ok())
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
+    };
+
+    let new_method = VerificationMethod {
+        id: format!("{}#key-{}", did, key_number),
+        method_type: VerificationMethodType::Dilithium5Key2026,
+        controller: disentangle_identity::DID(did.clone()),
+        public_key_bytes: new_pk_bytes,
+    };
+
+    let updated_doc = mgr
+        .rotate_key(&did, &old_key_id, new_method, &proof_old, &proof_new)
+        .map_err(|e| {
+            let status = match &e {
+                disentangle_identity::IdentityError::DIDNotFound(_) => StatusCode::NOT_FOUND,
+                disentangle_identity::IdentityError::SignatureVerificationFailed => {
+                    StatusCode::FORBIDDEN
+                }
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    error: format!("Failed to rotate key: {}", e),
+                    coherence_score: None,
+                }),
+            )
+        })?;
+
+    let doc_json = serde_json::to_value(&updated_doc).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to serialize document: {}", e),
+                coherence_score: None,
+            }),
+        )
+    })?;
+
+    Ok(Json(RotateKeyResponse { document: doc_json }))
 }
 
 // Capability endpoints
