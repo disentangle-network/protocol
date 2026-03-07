@@ -1157,13 +1157,11 @@ async fn resolve_and_record_conflict(state: &SharedState, tx_a: NodeId, tx_b: No
             return;
         }
     };
-    // v0.3: Use fork depth instead of fork block
-    let fork_depth = dag.depth(&fork);
     info!(
         "⚖️  RESOLVING CONFLICT at fork point {}",
         hex::encode(&fork[..8])
     );
-    let (winner, mass_a, mass_b) = resolve_conflict(dag, &tx_a, &tx_b, fork_depth);
+    let (winner, mass_a, mass_b) = resolve_conflict(dag, &tx_a, &tx_b);
     let winner_id = match winner {
         ConflictWinner::BranchA => tx_a,
         ConflictWinner::BranchB => tx_b,

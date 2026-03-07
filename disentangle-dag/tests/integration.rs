@@ -280,8 +280,8 @@ fn conflict_resolution_topological_mass() {
 
     // Compare path weights from fork to each branch tip
     // (using early bootstrap depth so curvature throttling is off)
-    let weight_a = dag.find_best_path_weight(&fork_id, &a1id, 10, 0);
-    let weight_b = dag.find_best_path_weight(&fork_id, &b2id, 10, 0);
+    let weight_a = dag.find_best_path_weight(&fork_id, &a1id, 10);
+    let weight_b = dag.find_best_path_weight(&fork_id, &b2id, 10);
 
     // Both should be reachable
     assert!(weight_a > 0, "Path to A1 should exist");

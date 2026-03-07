@@ -357,7 +357,7 @@ async fn test_sync_state_fork_and_conflict() {
 
     // Resolve conflict using consensus
     let dag = sync.dag_mut();
-    let (winner, mass_a, mass_b) = resolve_conflict(dag, &tx_3a_id, &tx_3b_id, 3);
+    let (winner, mass_a, mass_b) = resolve_conflict(dag, &tx_3a_id, &tx_3b_id);
 
     println!("Branch A (tx_3a) mass: {}", mass_a.total_mass);
     println!("Branch B (tx_3b) mass: {}", mass_b.total_mass);

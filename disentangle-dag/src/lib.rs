@@ -429,7 +429,6 @@ impl TransactionDAG {
     /// * `from` - Source node
     /// * `to` - Target node
     /// * `max_depth` - Maximum path length to explore
-    /// * `fork_depth` - Topological depth at which to evaluate bootstrap throttling
     ///
     /// # Fixed-Point Arithmetic
     /// All weights are in fixed-point (SCALE = 1.0). Product of n edges with
@@ -440,11 +439,12 @@ impl TransactionDAG {
         from: &NodeId,
         to: &NodeId,
         max_depth: usize,
-        fork_depth: u64,
     ) -> FixedPoint {
         if from == to {
             return SCALE;
         }
+
+        let from_depth = self.depth(from);
 
         let mut best = 0;
         // Stack: (current_node, accumulated_path_weight, depth)
@@ -469,7 +469,7 @@ impl TransactionDAG {
             if let Some(children) = self.children.get(&node).cloned() {
                 for child in children {
                     let curv = self.discrete_curvature(&node, &child);
-                    let edge_weight = self.curvature_weight_at_depth(curv, fork_depth);
+                    let edge_weight = self.curvature_weight_at_depth(curv, from_depth);
                     // Multiplicative path weight: product of all edge weights
                     let new_path_weight = fp_mul(path_weight, edge_weight);
                     // Only explore if the path still has meaningful weight
@@ -772,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_best_path_with_current_block() {
+    fn test_find_best_path_weight() {
         let mut dag = TransactionDAG::new();
 
         // Create a simple path: genesis -> tx1
@@ -786,18 +786,8 @@ mod tests {
         let tx1id = tx1.id;
         dag.insert_genesis(tx1); // Use insert_genesis to bypass MIN_PARENTS for test
 
-        // Find path weight at different block heights
-        let weight_early = dag.find_best_path_weight(&gid, &tx1id, 10, 500);
-        assert!(
-            weight_early > 0,
-            "Path weight should be positive during bootstrap"
-        );
-
-        let weight_late = dag.find_best_path_weight(&gid, &tx1id, 10, 10_000);
-        assert!(
-            weight_late > 0,
-            "Path weight should be positive after bootstrap"
-        );
+        let weight = dag.find_best_path_weight(&gid, &tx1id, 10);
+        assert!(weight > 0, "Path weight should be positive");
     }
 
     #[test]
