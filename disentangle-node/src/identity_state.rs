@@ -8,16 +8,16 @@ use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_dag::{NodeId, TransactionPayload};
 use disentangle_economy::{
     AgentScore, AgreementStatus, AgreementTerms, CommonsPool, DistributionRoot,
-    IntentCoherenceSnapshot, IntentParticipant, IntentStatus, OracleQuery, RegionSelector,
-    ServiceAgreement, SettlementAgreement, SharedIntent,
+    IntentCoherenceSnapshot, IntentParticipant, IntentStatus, JoinCommitment, OracleQuery,
+    Proposal, ProposalStatus, RegionSelector, ServiceAgreement, SettlementAgreement, SharedIntent,
 };
 use disentangle_identity::{
     evaluate_proposal, AgentType, Capability, CapabilityId, CapabilitySubject,
     CoherenceGradientMap, CoherenceProfile, Constraint, ConstraintContext, CurvatureDerivative,
     CurvatureHistory, DIDDocument, DIDUpdateOp, DelegationRecord, ExcitabilityProfile,
     GovernanceProposal, GovernanceVote, IdentityError, IdentityGraph, IntroductionContext,
-    IntroductionTransaction, JoinCommitment, PetnameDB, Proposal, ProposalResult, ProposalStatus,
-    ProposalType, RevocationScope, VerificationMethod, VoteChoice, DID, MAX_HISTORY_DEPTH,
+    IntroductionTransaction, PetnameDB, ProposalResult, ProposalType, RevocationScope,
+    VerificationMethod, VoteChoice, DID, MAX_HISTORY_DEPTH,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

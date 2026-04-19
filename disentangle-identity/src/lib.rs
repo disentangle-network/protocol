@@ -20,7 +20,6 @@ pub mod did;
 pub mod governance;
 pub mod graph;
 pub mod petname;
-pub mod proposal;
 pub mod transactions;
 
 // Re-export main types
@@ -43,7 +42,6 @@ pub use governance::{
 };
 pub use graph::IdentityGraph;
 pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
-pub use proposal::{JoinCommitment, Proposal, ProposalStatus};
 pub use transactions::{
     CapabilityOperation, CapabilityTransaction, DIDDeactivation, DIDRegistration, DIDUpdate,
     DIDUpdateOp, DisentangleTransaction, GovernanceTransaction, IdentityTransaction,
