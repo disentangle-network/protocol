@@ -1,0 +1,10 @@
+[package]
+name = "disentangle-economy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Experimental economic primitives (commons pools, shared intents, agreements, oracles) layered on top of disentangle-identity"
+
+[dependencies]
+disentangle-crypto = { path = "../disentangle-crypto" }
+serde.workspace = true

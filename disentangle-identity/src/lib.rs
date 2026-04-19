@@ -14,24 +14,16 @@
 //! This is Phase 1 of the implementation, providing core types without ZK proofs
 //! or networking. ZK integration (Phase 2) and full DAG integration (Phase 3) will follow.
 
-pub mod agreement;
 pub mod capability;
 pub mod coherence;
-pub mod commons_pool;
 pub mod did;
 pub mod governance;
 pub mod graph;
-pub mod intent;
-pub mod oracle;
 pub mod petname;
 pub mod proposal;
 pub mod transactions;
 
 // Re-export main types
-pub use agreement::{
-    AgreementStatus, AgreementTerms, CoherenceEffect, ResourceReceipt, ResourceType,
-    ServiceAgreement, SettlementAgreement,
-};
 pub use capability::{
     AccessOp, Capability, CapabilityId, CapabilitySubject, CapabilityTemplate, CoherenceTier,
     Constraint, ConstraintContext, DelegationRecord, GovernanceScope, NameOp, RevocationScope,
@@ -41,7 +33,6 @@ pub use coherence::{
     CoherenceGradientMap, CoherenceProfile, CurvatureDerivative, CurvatureHistory,
     ExcitabilityProfile, COHERENCE_HALF_LIFE, MAX_HISTORY_DEPTH,
 };
-pub use commons_pool::{CommonsPool, PoolClaim, PoolDeposit};
 pub use did::{
     AgentType, DIDDocument, DIDError, RuntimeAttestation, ServiceEndpoint, VerificationMethod,
     VerificationMethodType, DID,
@@ -51,8 +42,6 @@ pub use governance::{
     ProposalType, VoteChoice,
 };
 pub use graph::IdentityGraph;
-pub use intent::{IntentCoherenceSnapshot, IntentParticipant, IntentStatus, SharedIntent};
-pub use oracle::{AgentScore, DistributionRoot, OracleQuery, RegionSelector};
 pub use petname::{IntroductionStep, PetnameDB, PetnameEntry, ProposedName};
 pub use proposal::{JoinCommitment, Proposal, ProposalStatus};
 pub use transactions::{

@@ -11,6 +11,7 @@ disentangle-simhash = { path = "../disentangle-simhash" }
 disentangle-dag = { path = "../disentangle-dag" }
 disentangle-consensus = { path = "../disentangle-consensus" }
 disentangle-identity = { path = "../disentangle-identity" }
+disentangle-economy = { path = "../disentangle-economy" }
 sha3.workspace = true
 thiserror.workspace = true
 serde.workspace = true

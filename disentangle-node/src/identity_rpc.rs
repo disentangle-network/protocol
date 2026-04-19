@@ -12,10 +12,10 @@ use axum::{
     Json,
 };
 use disentangle_crypto::signature::SigningKey;
+use disentangle_economy::{OracleQuery, RegionSelector};
 use disentangle_identity::{
-    AgentType, CapabilitySubject, Constraint, DIDUpdateOp, OracleQuery, ProposalType,
-    RegionSelector, RevocationScope, ServiceEndpoint, VerificationMethod, VerificationMethodType,
-    VoteChoice,
+    AgentType, CapabilitySubject, Constraint, DIDUpdateOp, ProposalType, RevocationScope,
+    ServiceEndpoint, VerificationMethod, VerificationMethodType, VoteChoice,
 };
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -1444,7 +1444,7 @@ pub async fn agreement_propose_handler(
     };
 
     // Parse terms
-    let terms: disentangle_identity::AgreementTerms =
+    let terms: disentangle_economy::AgreementTerms =
         serde_json::from_value(req.terms).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
@@ -2677,7 +2677,7 @@ pub async fn network_health_handler(
         .filter(|agreement| {
             matches!(
                 agreement.status,
-                disentangle_identity::AgreementStatus::Active
+                disentangle_economy::AgreementStatus::Active
             )
         })
         .count();
