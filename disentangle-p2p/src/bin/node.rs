@@ -443,7 +443,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let p2p_port: u16 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(9000);
     let rpc_port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
-    let bootstrap_addr: Option<Multiaddr> = args.get(3).map(|s| parse_peer_addr(s)).transpose()?;
+    // Support multiple bootstrap addresses (all positional args after port pair)
+    let bootstrap_addrs: Vec<Multiaddr> = args[3..]
+        .iter()
+        .map(|s| parse_peer_addr(s))
+        .collect::<Result<Vec<_>, _>>()?;
     let keypair = generate_keypair();
     let local_peer_id = PeerId::from(keypair.public());
     info!("========================================");
@@ -455,10 +459,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut swarm = build_swarm(keypair)?;
     let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?;
     swarm.listen_on(listen_addr)?;
-    let is_bootstrap_node = bootstrap_addr.is_none();
-    if let Some(addr) = bootstrap_addr {
+    let is_bootstrap_node = bootstrap_addrs.is_empty();
+    for addr in &bootstrap_addrs {
         info!("Bootstrapping from {}", addr);
-        swarm.dial(addr)?;
+        swarm.dial(addr.clone())?;
     }
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(100);
 

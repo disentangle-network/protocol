@@ -66,7 +66,7 @@ pub fn build_swarm(keypair: Keypair) -> Result<DisentangleSwarm, Box<dyn std::er
         )?
         .with_dns()?
         .with_behaviour(|_key| DisentangleBehaviour::new(local_peer_id, &keypair))?
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::MAX))
         .build();
     Ok(swarm)
 }
