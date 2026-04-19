@@ -8,7 +8,7 @@ license.workspace = true
 disentangle-crypto = { path = "../disentangle-crypto" }
 disentangle-simhash = { path = "../disentangle-simhash" }
 disentangle-dag = { path = "../disentangle-dag" }
-disentangle-zkp = { path = "../disentangle-zkp" }
+disentangle-zkp = { path = "../disentangle-zkp", features = ["primitives-future"] }
 serde.workspace = true
 thiserror.workspace = true
 sha3.workspace = true
