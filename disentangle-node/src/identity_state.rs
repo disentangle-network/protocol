@@ -6,16 +6,18 @@
 use disentangle_crypto::hash::{sha3_256, Hash256};
 use disentangle_crypto::signature::{generate_keypair, SigningKey, VerifyingKey};
 use disentangle_dag::{NodeId, TransactionPayload};
+use disentangle_economy::{
+    AgentScore, AgreementStatus, AgreementTerms, CommonsPool, DistributionRoot,
+    IntentCoherenceSnapshot, IntentParticipant, IntentStatus, JoinCommitment, OracleQuery,
+    Proposal, ProposalStatus, RegionSelector, ServiceAgreement, SettlementAgreement, SharedIntent,
+};
 use disentangle_identity::{
-    evaluate_proposal, AgentScore, AgentType, AgreementStatus, AgreementTerms, Capability,
-    CapabilityId, CapabilitySubject, CoherenceGradientMap, CoherenceProfile, CommonsPool,
-    Constraint, ConstraintContext, CurvatureDerivative, CurvatureHistory, DIDDocument, DIDUpdateOp,
-    DelegationRecord, DistributionRoot, ExcitabilityProfile, GovernanceProposal, GovernanceVote,
-    IdentityError, IdentityGraph, IntentCoherenceSnapshot, IntentParticipant, IntentStatus,
-    IntroductionContext, IntroductionTransaction, JoinCommitment, OracleQuery, PetnameDB, Proposal,
-    ProposalResult, ProposalStatus, ProposalType, RegionSelector, RevocationScope,
-    ServiceAgreement, SettlementAgreement, SharedIntent, VerificationMethod, VoteChoice, DID,
-    MAX_HISTORY_DEPTH,
+    evaluate_proposal, AgentType, Capability, CapabilityId, CapabilitySubject,
+    CoherenceGradientMap, CoherenceProfile, Constraint, ConstraintContext, CurvatureDerivative,
+    CurvatureHistory, DIDDocument, DIDUpdateOp, DelegationRecord, ExcitabilityProfile,
+    GovernanceProposal, GovernanceVote, IdentityError, IdentityGraph, IntroductionContext,
+    IntroductionTransaction, PetnameDB, ProposalResult, ProposalType, RevocationScope,
+    VerificationMethod, VoteChoice, DID, MAX_HISTORY_DEPTH,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -2990,7 +2992,7 @@ mod tests {
         let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
         let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
 
-        let terms = disentangle_identity::AgreementTerms {
+        let terms = disentangle_economy::AgreementTerms {
             description: "Compute 100 embeddings".to_string(),
             deadline_depth: Some(1000),
             success_criteria: vec!["All embeddings returned".to_string()],
@@ -3006,7 +3008,7 @@ mod tests {
         let agreement = manager.get_agreement(&agreement_id).unwrap();
         assert_eq!(
             agreement.status,
-            disentangle_identity::AgreementStatus::Proposed
+            disentangle_economy::AgreementStatus::Proposed
         );
         assert!(agreement.consumer_signature.is_none());
 
@@ -3019,7 +3021,7 @@ mod tests {
         let agreement = manager.get_agreement(&agreement_id).unwrap();
         assert_eq!(
             agreement.status,
-            disentangle_identity::AgreementStatus::Active
+            disentangle_economy::AgreementStatus::Active
         );
         assert!(agreement.consumer_signature.is_some());
     }
@@ -3031,7 +3033,7 @@ mod tests {
         let (did_provider, _, sk_provider) = manager.register_did(AgentType::Human).unwrap();
         let (did_consumer, _, sk_consumer) = manager.register_did(AgentType::Human).unwrap();
 
-        let terms = disentangle_identity::AgreementTerms {
+        let terms = disentangle_economy::AgreementTerms {
             description: "Test service".to_string(),
             deadline_depth: None,
             success_criteria: vec![],
@@ -3054,7 +3056,7 @@ mod tests {
 
         let agreement = manager.get_agreement(&agreement_id).unwrap();
         match agreement.status {
-            disentangle_identity::AgreementStatus::Completed {
+            disentangle_economy::AgreementStatus::Completed {
                 success,
                 outcome_hash: hash,
             } => {
@@ -3074,7 +3076,7 @@ mod tests {
         let (did_consumer, _, _sk_consumer) = manager.register_did(AgentType::Human).unwrap();
         let (did_other, _, _sk_other) = manager.register_did(AgentType::Human).unwrap();
 
-        let terms = disentangle_identity::AgreementTerms {
+        let terms = disentangle_economy::AgreementTerms {
             description: "Test".to_string(),
             deadline_depth: None,
             success_criteria: vec![],
@@ -3134,8 +3136,8 @@ mod tests {
         }
 
         // Query oracle for global distribution
-        let query = disentangle_identity::OracleQuery::new(
-            disentangle_identity::RegionSelector::Global,
+        let query = disentangle_economy::OracleQuery::new(
+            disentangle_economy::RegionSelector::Global,
             0,
             10,
         );
@@ -3172,8 +3174,8 @@ mod tests {
 
         manager.introduce(&did_a.0, &sk_a, &did_b.0, "B").unwrap();
 
-        let query = disentangle_identity::OracleQuery::new(
-            disentangle_identity::RegionSelector::Explicit(vec![did_a.0.clone(), did_b.0.clone()]),
+        let query = disentangle_economy::OracleQuery::new(
+            disentangle_economy::RegionSelector::Explicit(vec![did_a.0.clone(), did_b.0.clone()]),
             0,
             0,
         );
@@ -3240,8 +3242,8 @@ mod tests {
             .unwrap();
 
         // Compute oracle distribution
-        let query = disentangle_identity::OracleQuery::new(
-            disentangle_identity::RegionSelector::Global,
+        let query = disentangle_economy::OracleQuery::new(
+            disentangle_economy::RegionSelector::Global,
             0,
             0,
         );

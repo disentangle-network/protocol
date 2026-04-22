@@ -9,6 +9,7 @@ members = [
     "disentangle-crypto",
     "disentangle-zkp",
     "disentangle-identity",
+    "disentangle-economy",
     "disentangle-cli",
     "disentangle-membrane",
 ]
