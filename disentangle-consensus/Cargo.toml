@@ -9,7 +9,7 @@ description = "Topological mass consensus for Proof of Entanglement v0.2"
 disentangle-crypto = { path = "../disentangle-crypto" }
 disentangle-simhash = { path = "../disentangle-simhash" }
 disentangle-dag = { path = "../disentangle-dag" }
-disentangle-zkp = { path = "../disentangle-zkp" }
+disentangle-zkp = { path = "../disentangle-zkp", features = ["primitives-future"] }
 sha3.workspace = true
 thiserror.workspace = true
 serde.workspace = true

@@ -1,4 +1,11 @@
-//! Integration tests for Phase 4: Confidential Transactions
+//! Integration tests for Phase 4: Confidential Transactions.
+//!
+//! These exercises target the `primitives-future` surface (stealth,
+//! confidential, balance, range). The file is gated so that default
+//! builds — which ship only the reputation-proof surface — do not try
+//! to compile against symbols that are not exported.
+
+#![cfg(feature = "primitives-future")]
 
 use disentangle_crypto::kem::generate_kem_keypair;
 use disentangle_zkp::stealth::generate_stealth_address;

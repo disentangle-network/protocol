@@ -6,6 +6,17 @@ license.workspace = true
 repository.workspace = true
 description = "Zero-knowledge proof system for Entangle Protocol using Plonky3 STARKs"
 
+[features]
+# Default features: reputation proofs only. This is the headline surface
+# of the crate and what enterprise deployments depend on.
+default = []
+
+# Opt-in primitives reserved for future applications (privacy-preserving
+# payments, stealth addressing, confidential transaction circuits).
+# These modules remain available behind this flag but are not load-bearing
+# for the current enterprise positioning.
+primitives-future = []
+
 [dependencies]
 # Workspace dependencies
 thiserror.workspace = true

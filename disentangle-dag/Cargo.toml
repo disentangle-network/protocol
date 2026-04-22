@@ -8,7 +8,7 @@ description = "DAG data structure with discrete curvature for Proof of Entanglem
 [dependencies]
 disentangle-crypto = { path = "../disentangle-crypto" }
 disentangle-simhash = { path = "../disentangle-simhash" }
-disentangle-zkp = { path = "../disentangle-zkp" }
+disentangle-zkp = { path = "../disentangle-zkp", features = ["primitives-future"] }
 sha3.workspace = true
 thiserror.workspace = true
 serde.workspace = true
